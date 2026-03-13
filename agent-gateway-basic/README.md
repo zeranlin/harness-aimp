@@ -8,11 +8,16 @@ Entrypoints:
 - scripts/run.sh
 - scripts/healthcheck.sh
 
+Config:
+- `config/routes.properties`
+- `config/clients.properties`
+
 API:
 - `GET /health`
 - `GET|POST /gateway/v1/invoke?service=<qa|compliance|pricing>`
 - `GET /ops/metrics/overview`
 - `GET /ops/audits`
+- `GET /ops/config`
 
 Headers:
 - `x-api-key: demo-key-ops`
@@ -26,3 +31,4 @@ Capabilities:
 - 审计记录
 - 运营指标汇总
 - HTTP upstream 转发到 L2/L3/L4
+- 路由与客户端策略配置化

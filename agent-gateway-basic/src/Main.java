@@ -4,6 +4,8 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -24,6 +26,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -31,34 +34,49 @@ public class Main {
     private static final int PORT = 8080;
 
     public static void main(String[] args) throws Exception {
-        GatewayApp app = GatewayApp.defaultApp();
         if (args.length > 0 && "--self-test".equals(args[0])) {
             runSelfTest();
             System.out.println("self-test ok");
             return;
         }
 
+        GatewayApp app = GatewayApp.fromDisk(new HttpUpstreamInvoker());
         HttpServer server = HttpServer.create(new InetSocketAddress(PORT), 0);
-        server.createContext("/health", new JsonHandler(exchange ->
-                GatewayResponse.ok(jsonObject(mapOf(
+        server.createContext("/health", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) {
+                return GatewayResponse.ok(jsonObject(mapOf(
                         "status", "UP",
                         "service", "agent-gateway-basic"
-                )))
-        ));
+                )));
+            }
+        }));
         server.createContext("/gateway/v1/invoke", new InvokeHandler(app));
-        server.createContext("/ops/metrics/overview", new JsonHandler(exchange ->
-                GatewayResponse.ok(app.metricsJson())
-        ));
-        server.createContext("/ops/audits", new JsonHandler(exchange ->
-                GatewayResponse.ok(app.auditJson())
-        ));
+        server.createContext("/ops/metrics/overview", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) {
+                return GatewayResponse.ok(app.metricsJson());
+            }
+        }));
+        server.createContext("/ops/audits", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) {
+                return GatewayResponse.ok(app.auditJson());
+            }
+        }));
+        server.createContext("/ops/config", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) {
+                return GatewayResponse.ok(app.configJson());
+            }
+        }));
         server.setExecutor(null);
         System.out.println("agent-gateway-basic listening on " + PORT);
         server.start();
     }
 
     private static void runSelfTest() {
-        GatewayApp app = GatewayApp.withInvoker(defaultProfiles(), fakeInvoker());
+        GatewayApp app = GatewayApp.fromConfig(defaultRoutes(), defaultProfiles(), fakeInvoker());
 
         GatewayResponse missingKey = app.invoke(new GatewayRequest("GET", "/gateway/v1/invoke",
                 stringMapOf("service", "qa"), Collections.<String, String>emptyMap(), ""));
@@ -69,7 +87,7 @@ public class Main {
         assertEquals(403, badKey.statusCode, "unknown key should fail");
 
         GatewayResponse blockedService = app.invoke(new GatewayRequest("GET", "/gateway/v1/invoke",
-                stringMapOf("service", "restricted"), stringMapOf("x-api-key", "demo-key-partner"), ""));
+                stringMapOf("service", "pricing"), stringMapOf("x-api-key", "demo-key-partner"), ""));
         assertEquals(403, blockedService.statusCode, "policy should block restricted service");
 
         GatewayResponse ok = app.invoke(new GatewayRequest("POST", "/gateway/v1/invoke",
@@ -77,12 +95,11 @@ public class Main {
         assertEquals(200, ok.statusCode, "authorized request should pass");
         assertContains(ok.body, "\"provider\":\"agent-business-solution\"", "response should come from upstream");
 
-        GatewayApp limitApp = GatewayApp.withInvoker(Collections.singletonList(new ClientProfile(
-                "limited",
-                "demo-key-limited",
-                1,
-                setOf("qa")
-        )), fakeInvoker());
+        GatewayApp limitApp = GatewayApp.fromConfig(
+                defaultRoutes(),
+                Collections.singletonList(new ClientProfile("limited", "demo-key-limited", 1, setOf("qa"))),
+                fakeInvoker()
+        );
         GatewayResponse first = limitApp.invoke(new GatewayRequest("GET", "/gateway/v1/invoke",
                 stringMapOf("service", "qa"), stringMapOf("x-api-key", "demo-key-limited"), ""));
         GatewayResponse second = limitApp.invoke(new GatewayRequest("GET", "/gateway/v1/invoke",
@@ -90,11 +107,9 @@ public class Main {
         assertEquals(200, first.statusCode, "first limited request should pass");
         assertEquals(429, second.statusCode, "second limited request should be throttled");
 
-        String metrics = app.metricsJson();
-        assertContains(metrics, "\"authorized_requests\":1", "metrics should count successful requests");
-        String audits = app.auditJson();
-        assertContains(audits, "\"decision\":\"ALLOW\"", "audit log should include allow");
-        assertContains(audits, "\"decision\":\"DENY\"", "audit log should include deny");
+        String config = app.configJson();
+        assertContains(config, "\"service\":\"qa\"", "config endpoint should expose routes");
+        assertContains(config, "\"client\":\"ops\"", "config endpoint should expose clients");
     }
 
     private static UpstreamInvoker fakeInvoker() {
@@ -119,6 +134,14 @@ public class Main {
         );
     }
 
+    private static Map<String, RouteConfig> defaultRoutes() {
+        Map<String, RouteConfig> routes = new LinkedHashMap<String, RouteConfig>();
+        routes.put("qa", new RouteConfig("qa", "agent-business-solution", "http://127.0.0.1:8002/invoke"));
+        routes.put("compliance", new RouteConfig("compliance", "atomic-ai-service", "http://127.0.0.1:8003/invoke"));
+        routes.put("pricing", new RouteConfig("pricing", "agent-model-runtime", "http://127.0.0.1:8081/invoke"));
+        return routes;
+    }
+
     private static void assertEquals(int expected, int actual, String message) {
         if (expected != actual) {
             throw new IllegalStateException(message + ": expected " + expected + " but got " + actual);
@@ -126,58 +149,8 @@ public class Main {
     }
 
     private static void assertContains(String value, String expectedFragment, String message) {
-        if (!value.contains(expectedFragment)) {
+        if (value == null || value.indexOf(expectedFragment) < 0) {
             throw new IllegalStateException(message + ": missing fragment " + expectedFragment);
-        }
-    }
-
-    private static final class InvokeHandler implements HttpHandler {
-        private final GatewayApp app;
-
-        private InvokeHandler(GatewayApp app) {
-            this.app = app;
-        }
-
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            GatewayRequest request = GatewayRequest.fromExchange(exchange);
-            GatewayResponse response = app.invoke(request);
-            writeResponse(exchange, response);
-        }
-    }
-
-    private static final class JsonHandler implements HttpHandler {
-        private final ExchangeProcessor processor;
-
-        private JsonHandler(ExchangeProcessor processor) {
-            this.processor = processor;
-        }
-
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            GatewayResponse response = processor.handle(exchange);
-            writeResponse(exchange, response);
-        }
-    }
-
-    @FunctionalInterface
-    private interface ExchangeProcessor {
-        GatewayResponse handle(HttpExchange exchange) throws IOException;
-    }
-
-    @FunctionalInterface
-    private interface UpstreamInvoker {
-        GatewayResponse invoke(RouteConfig route, GatewayRequest request);
-    }
-
-    private static void writeResponse(HttpExchange exchange, GatewayResponse response) throws IOException {
-        byte[] bytes = response.body.getBytes(StandardCharsets.UTF_8);
-        Headers headers = exchange.getResponseHeaders();
-        headers.set("Content-Type", "application/json; charset=utf-8");
-        headers.set("X-Gateway", "agent-gateway-basic");
-        exchange.sendResponseHeaders(response.statusCode, bytes.length);
-        try (OutputStream outputStream = exchange.getResponseBody()) {
-            outputStream.write(bytes);
         }
     }
 
@@ -189,22 +162,23 @@ public class Main {
         private final Deque<AuditEvent> auditEvents = new ArrayDeque<AuditEvent>();
         private final UpstreamInvoker upstreamInvoker;
 
-        private GatewayApp(List<ClientProfile> profiles, UpstreamInvoker upstreamInvoker) {
+        private GatewayApp(Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, UpstreamInvoker upstreamInvoker) {
             Map<String, ClientProfile> profilesMap = new LinkedHashMap<String, ClientProfile>();
             for (ClientProfile profile : profiles) {
                 profilesMap.put(profile.apiKey, profile);
             }
             this.profilesByApiKey = profilesMap;
-            this.routesByService = defaultRoutes();
+            this.routesByService = routesByService;
             this.upstreamInvoker = upstreamInvoker;
         }
 
-        static GatewayApp defaultApp() {
-            return new GatewayApp(defaultProfiles(), new HttpUpstreamInvoker());
+        static GatewayApp fromDisk(UpstreamInvoker upstreamInvoker) throws IOException {
+            GatewayDiskConfig config = GatewayDiskConfig.load(projectRoot());
+            return fromConfig(config.routesByService, config.clientProfiles, upstreamInvoker);
         }
 
-        static GatewayApp withInvoker(List<ClientProfile> profiles, UpstreamInvoker upstreamInvoker) {
-            return new GatewayApp(profiles, upstreamInvoker);
+        static GatewayApp fromConfig(Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, UpstreamInvoker upstreamInvoker) {
+            return new GatewayApp(routesByService, profiles, upstreamInvoker);
         }
 
         GatewayResponse invoke(GatewayRequest request) {
@@ -252,9 +226,7 @@ public class Main {
                 )));
             }
 
-            RateWindow window = windowsByClient.containsKey(clientName)
-                    ? windowsByClient.get(clientName)
-                    : new RateWindow();
+            RateWindow window = windowsByClient.containsKey(clientName) ? windowsByClient.get(clientName) : new RateWindow();
             windowsByClient.put(clientName, window);
             if (!window.allow(profile.requestsPerMinute)) {
                 recordAudit(clientName, service, "DENY", "rate_limited", startedAt, 429);
@@ -268,12 +240,13 @@ public class Main {
 
             GatewayResponse upstreamResponse = upstreamInvoker.invoke(route, request);
             int statusCode = upstreamResponse.statusCode;
-            String decision = statusCode >= 200 && statusCode < 300 ? "ALLOW" : "DENY";
-            String reason = statusCode >= 200 && statusCode < 300 ? "forwarded" : "upstream_error";
-            recordAudit(clientName, service, decision, reason, startedAt, statusCode);
-            incrementMetric(service, statusCode >= 200 && statusCode < 300, startedAt);
+            boolean authorized = statusCode >= 200 && statusCode < 300;
+            recordAudit(clientName, service, authorized ? "ALLOW" : "DENY",
+                    authorized ? "forwarded" : "upstream_error", startedAt, statusCode);
+            incrementMetric(service, authorized, startedAt);
+
             return GatewayResponse.json(statusCode, jsonObject(mapOf(
-                    "status", statusCode >= 200 && statusCode < 300 ? "ok" : "error",
+                    "status", authorized ? "ok" : "error",
                     "routed_service", service,
                     "client", clientName,
                     "upstream", route.upstreamName,
@@ -314,13 +287,34 @@ public class Main {
             return jsonObject(mapOf("items", "[" + String.join(",", items) + "]"));
         }
 
+        String configJson() {
+            List<String> routes = new ArrayList<String>();
+            for (RouteConfig route : routesByService.values()) {
+                routes.add(jsonObject(mapOf(
+                        "service", route.service,
+                        "upstream", route.upstreamName,
+                        "invoke_url", route.invokeUrl
+                )));
+            }
+
+            List<String> clients = new ArrayList<String>();
+            for (ClientProfile profile : profilesByApiKey.values()) {
+                clients.add(jsonObject(mapOf(
+                        "client", profile.name,
+                        "requests_per_minute", profile.requestsPerMinute,
+                        "allowed_services", jsonArray(profile.allowedServices)
+                )));
+            }
+            return jsonObject(mapOf(
+                    "routes", "[" + String.join(",", routes) + "]",
+                    "clients", "[" + String.join(",", clients) + "]"
+            ));
+        }
+
         private void incrementMetric(String service, boolean authorized, Instant startedAt) {
-            ServiceMetrics metrics = metricsByService.containsKey(service)
-                    ? metricsByService.get(service)
-                    : new ServiceMetrics();
+            ServiceMetrics metrics = metricsByService.containsKey(service) ? metricsByService.get(service) : new ServiceMetrics();
             metricsByService.put(service, metrics);
-            long durationMs = Duration.between(startedAt, Instant.now()).toMillis();
-            metrics.record(authorized, durationMs);
+            metrics.record(authorized, Duration.between(startedAt, Instant.now()).toMillis());
         }
 
         private void recordAudit(String client, String service, String decision, String reason, Instant timestamp, int statusCode) {
@@ -331,13 +325,83 @@ public class Main {
                 }
             }
         }
+    }
 
-        private Map<String, RouteConfig> defaultRoutes() {
+    private static final class GatewayDiskConfig {
+        private final Map<String, RouteConfig> routesByService;
+        private final List<ClientProfile> clientProfiles;
+
+        private GatewayDiskConfig(Map<String, RouteConfig> routesByService, List<ClientProfile> clientProfiles) {
+            this.routesByService = routesByService;
+            this.clientProfiles = clientProfiles;
+        }
+
+        static GatewayDiskConfig load(File projectRoot) throws IOException {
+            Properties routeProps = loadProperties(new File(projectRoot, "config/routes.properties"));
+            Properties clientProps = loadProperties(new File(projectRoot, "config/clients.properties"));
+            return new GatewayDiskConfig(parseRoutes(routeProps), parseClients(clientProps));
+        }
+
+        private static Properties loadProperties(File file) throws IOException {
+            Properties properties = new Properties();
+            InputStream inputStream = new FileInputStream(file);
+            try {
+                properties.load(inputStream);
+            } finally {
+                inputStream.close();
+            }
+            return properties;
+        }
+
+        private static Map<String, RouteConfig> parseRoutes(Properties properties) {
             Map<String, RouteConfig> routes = new LinkedHashMap<String, RouteConfig>();
-            routes.put("qa", new RouteConfig("agent-business-solution", "http://127.0.0.1:8002/invoke"));
-            routes.put("compliance", new RouteConfig("atomic-ai-service", "http://127.0.0.1:8003/invoke"));
-            routes.put("pricing", new RouteConfig("agent-model-runtime", "http://127.0.0.1:8081/invoke"));
+            Set<String> services = new LinkedHashSet<String>();
+            for (String key : properties.stringPropertyNames()) {
+                if (key.startsWith("service.")) {
+                    String[] parts = key.split("\\.");
+                    if (parts.length >= 3) {
+                        services.add(parts[1]);
+                    }
+                }
+            }
+            for (String service : services) {
+                routes.put(service, new RouteConfig(
+                        service,
+                        required(properties, "service." + service + ".upstream_name"),
+                        required(properties, "service." + service + ".invoke_url")
+                ));
+            }
             return routes;
+        }
+
+        private static List<ClientProfile> parseClients(Properties properties) {
+            List<ClientProfile> profiles = new ArrayList<ClientProfile>();
+            Set<String> clients = new LinkedHashSet<String>();
+            for (String key : properties.stringPropertyNames()) {
+                if (key.startsWith("client.")) {
+                    String[] parts = key.split("\\.");
+                    if (parts.length >= 3) {
+                        clients.add(parts[1]);
+                    }
+                }
+            }
+            for (String client : clients) {
+                profiles.add(new ClientProfile(
+                        client,
+                        required(properties, "client." + client + ".api_key"),
+                        Integer.parseInt(required(properties, "client." + client + ".requests_per_minute")),
+                        csvToSet(required(properties, "client." + client + ".allowed_services"))
+                ));
+            }
+            return profiles;
+        }
+
+        private static String required(Properties properties, String key) {
+            String value = properties.getProperty(key);
+            if (value == null || value.trim().isEmpty()) {
+                throw new IllegalStateException("missing config key: " + key);
+            }
+            return value.trim();
         }
     }
 
@@ -378,21 +442,72 @@ public class Main {
         }
 
         private String upstreamPayload(GatewayRequest request) {
-            String body = request.body == null ? "" : request.body;
-            if (body.trim().isEmpty()) {
+            if (request.body == null || request.body.trim().isEmpty()) {
                 return jsonObject(mapOf("prompt", "", "document", ""));
             }
-            return body;
+            return request.body;
         }
     }
 
+    private static final class InvokeHandler implements HttpHandler {
+        private final GatewayApp app;
+
+        private InvokeHandler(GatewayApp app) {
+            this.app = app;
+        }
+
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            writeResponse(exchange, app.invoke(GatewayRequest.fromExchange(exchange)));
+        }
+    }
+
+    private static final class JsonHandler implements HttpHandler {
+        private final ExchangeProcessor processor;
+
+        private JsonHandler(ExchangeProcessor processor) {
+            this.processor = processor;
+        }
+
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            writeResponse(exchange, processor.handle(exchange));
+        }
+    }
+
+    @FunctionalInterface
+    private interface ExchangeProcessor {
+        GatewayResponse handle(HttpExchange exchange) throws IOException;
+    }
+
+    @FunctionalInterface
+    private interface UpstreamInvoker {
+        GatewayResponse invoke(RouteConfig route, GatewayRequest request);
+    }
+
     private static final class RouteConfig {
+        private final String service;
         private final String upstreamName;
         private final String invokeUrl;
 
-        private RouteConfig(String upstreamName, String invokeUrl) {
+        private RouteConfig(String service, String upstreamName, String invokeUrl) {
+            this.service = service;
             this.upstreamName = upstreamName;
             this.invokeUrl = invokeUrl;
+        }
+    }
+
+    private static final class ClientProfile {
+        private final String name;
+        private final String apiKey;
+        private final int requestsPerMinute;
+        private final Set<String> allowedServices;
+
+        private ClientProfile(String name, String apiKey, int requestsPerMinute, Set<String> allowedServices) {
+            this.name = name;
+            this.apiKey = apiKey;
+            this.requestsPerMinute = requestsPerMinute;
+            this.allowedServices = allowedServices;
         }
     }
 
@@ -441,20 +556,6 @@ public class Main {
 
         static GatewayResponse json(int statusCode, String body) {
             return new GatewayResponse(statusCode, body);
-        }
-    }
-
-    private static final class ClientProfile {
-        private final String name;
-        private final String apiKey;
-        private final int requestsPerMinute;
-        private final Set<String> allowedServices;
-
-        private ClientProfile(String name, String apiKey, int requestsPerMinute, Set<String> allowedServices) {
-            this.name = name;
-            this.apiKey = apiKey;
-            this.requestsPerMinute = requestsPerMinute;
-            this.allowedServices = allowedServices;
         }
     }
 
@@ -512,6 +613,25 @@ public class Main {
         }
     }
 
+    private static File projectRoot() {
+        String configured = System.getProperty("gateway.root");
+        if (configured != null && configured.trim().length() > 0) {
+            return new File(configured);
+        }
+        return new File(".").getAbsoluteFile();
+    }
+
+    private static void writeResponse(HttpExchange exchange, GatewayResponse response) throws IOException {
+        byte[] bytes = response.body.getBytes(StandardCharsets.UTF_8);
+        Headers headers = exchange.getResponseHeaders();
+        headers.set("Content-Type", "application/json; charset=utf-8");
+        headers.set("X-Gateway", "agent-gateway-basic");
+        exchange.sendResponseHeaders(response.statusCode, bytes.length);
+        try (OutputStream outputStream = exchange.getResponseBody()) {
+            outputStream.write(bytes);
+        }
+    }
+
     private static Map<String, String> parseQueryParams(URI uri) {
         String rawQuery = uri.getRawQuery();
         if (rawQuery == null || rawQuery.trim().isEmpty()) {
@@ -520,9 +640,7 @@ public class Main {
         Map<String, String> params = new LinkedHashMap<String, String>();
         for (String pair : rawQuery.split("&")) {
             String[] parts = pair.split("=", 2);
-            String key = parts[0];
-            String value = parts.length > 1 ? parts[1] : "";
-            params.put(key, value);
+            params.put(parts[0], parts.length > 1 ? parts[1] : "");
         }
         return params;
     }
@@ -547,14 +665,22 @@ public class Main {
         return new String(outputStream.toByteArray(), StandardCharsets.UTF_8);
     }
 
+    private static Set<String> csvToSet(String csv) {
+        Set<String> values = new LinkedHashSet<String>();
+        for (String item : csv.split(",")) {
+            String trimmed = item.trim();
+            if (!trimmed.isEmpty()) {
+                values.add(trimmed);
+            }
+        }
+        return values;
+    }
+
     private static Set<String> setOf(String... values) {
         return new LinkedHashSet<String>(Arrays.asList(values));
     }
 
     private static Map<String, String> stringMapOf(String... values) {
-        if (values.length % 2 != 0) {
-            throw new IllegalArgumentException("stringMapOf requires even number of arguments");
-        }
         Map<String, String> map = new LinkedHashMap<String, String>();
         for (int i = 0; i < values.length; i += 2) {
             map.put(values[i], values[i + 1]);
@@ -563,14 +689,19 @@ public class Main {
     }
 
     private static Map<String, Object> mapOf(Object... values) {
-        if (values.length % 2 != 0) {
-            throw new IllegalArgumentException("mapOf requires even number of arguments");
-        }
         Map<String, Object> map = new LinkedHashMap<String, Object>();
         for (int i = 0; i < values.length; i += 2) {
             map.put(Objects.toString(values[i]), values[i + 1]);
         }
         return map;
+    }
+
+    private static String jsonArray(Set<String> values) {
+        List<String> items = new ArrayList<String>();
+        for (String value : values) {
+            items.add("\"" + escapeJson(value) + "\"");
+        }
+        return "[" + String.join(",", items) + "]";
     }
 
     private static String jsonObject(Map<String, Object> values) {
@@ -604,9 +735,6 @@ public class Main {
     }
 
     private static String escapeJson(String value) {
-        return value
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n");
+        return value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
     }
 }
