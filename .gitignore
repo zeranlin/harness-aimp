@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 agent-gateway-basic/data/*.log
 agent-gateway-basic/data/metrics.log
+agent-business-solution/data/*.log
