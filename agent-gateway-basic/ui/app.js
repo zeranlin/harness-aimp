@@ -251,24 +251,37 @@ async function renderCapabilities() {
   const payload = await getJson("/ops/l3/capabilities");
   const items = payload.items || [];
   const stats = payload.stats || {};
-  const rows = items.map((item, index) =>
-    `<tr><td>${item.capability_code}</td><td>${item.name}</td><td>${item.status}</td><td>${(item.input || []).join(", ")}</td><td>${(item.outputs || []).join(", ")}</td><td>${detailButton("capabilities", index)}</td></tr>`
-  );
+  const capabilityStats = stats.capabilities || {};
+  const gatewayRejects = payload.gateway_rejects || {};
+  const rows = items.map((item, index) => {
+    const itemStats = capabilityStats[item.capability_code] || {};
+    return `<tr><td>${item.capability_code}</td><td>${item.name}</td><td>${item.status}</td><td>${itemStats.calls || 0}</td><td>${itemStats.average_duration_ms || 0}</td><td>${itemStats.last_status || "-"}</td><td>${detailButton("capabilities", index)}</td></tr>`;
+  });
   const errorRows = Object.entries(stats.error_codes || {}).map(
     ([code, count]) => `<tr><td>${code}</td><td>${count}</td></tr>`
   );
-  window.__consoleDatasets = { ...(window.__consoleDatasets || {}), capabilities: items.map((item) => ({ ...item, __detailTitle: `${item.capability_code} 能力详情` })) };
+  const rejectRows = Object.entries(gatewayRejects.error_codes || {}).map(
+    ([code, count]) => `<tr><td>${code}</td><td>${count}</td></tr>`
+  );
+  window.__consoleDatasets = { ...(window.__consoleDatasets || {}), capabilities: items.map((item) => ({ ...item, stats: capabilityStats[item.capability_code] || {}, __detailTitle: `${item.capability_code} 能力详情` })) };
   return `
     <div class="toolbar"><h2>原子能力目录</h2><button id="refresh-capabilities">刷新</button></div>
     <div class="grid stats" style="margin-top:16px;">
       ${card("能力数", items.length)}
-      ${card("调用量", stats.call_count || 0, "good")}
-      ${card("拒绝量", stats.rejected_count || 0, stats.rejected_count ? "warn" : "")}
+      ${card("调用量", stats.total_calls || 0, "good")}
+      ${card("平均耗时", stats.average_duration_ms || 0)}
       ${card("错误种类", Object.keys(stats.error_codes || {}).length, Object.keys(stats.error_codes || {}).length ? "bad" : "")}
     </div>
+    <div class="grid stats" style="margin-top:16px;">
+      ${card("成功调用", stats.success_calls || 0, "good")}
+      ${card("失败调用", stats.error_calls || 0, stats.error_calls ? "bad" : "")}
+      ${card("网关拒绝", gatewayRejects.count || 0, (gatewayRejects.count || 0) ? "warn" : "")}
+      ${card("活跃能力", items.filter((item) => item.status === "active").length)}
+    </div>
     ${filterBar({ searchId: "capability-search", searchPlaceholder: "搜索能力编码或名称", statusId: "capability-status", statuses: [...new Set(items.map((item) => item.status))] })}
-    <div style="margin-top:16px;">${table(["能力编码", "名称", "状态", "输入", "输出", "明细"], rows, { tableId: "capability-table" })}</div>
-    <div style="margin-top:16px;">${table(["错误码", "次数"], errorRows, { tableId: "capability-errors" })}</div>
+    <div style="margin-top:16px;">${table(["能力编码", "名称", "状态", "调用量", "平均耗时(ms)", "最近状态", "明细"], rows, { tableId: "capability-table" })}</div>
+    <div style="margin-top:16px;">${table(["能力错误码", "次数"], errorRows, { tableId: "capability-errors" })}</div>
+    <div style="margin-top:16px;">${table(["网关拒绝原因", "次数"], rejectRows, { tableId: "capability-rejects" })}</div>
   `;
 }
 

@@ -593,37 +593,44 @@ public class Main {
         }
 
         String l3CapabilitiesJson() {
-            String capabilitiesJson = fetchJson("http://127.0.0.1:8003/capabilities", jsonObject(mapOf(
+            String capabilitiesJson = fetchJson("http://127.0.0.1:8003/ops/capabilities", jsonObject(mapOf(
                     "status", "error",
                     "message", "l3 unavailable",
-                    "items", "[]"
+                    "items", "[]",
+                    "stats", jsonObject(mapOf(
+                            "total_calls", 0,
+                            "success_calls", 0,
+                            "error_calls", 0,
+                            "average_duration_ms", 0,
+                            "capabilities", jsonObject(mapOf()),
+                            "error_codes", jsonObject(mapOf())
+                    ))
             )));
             List<String> recentAuditEntries = readRecentAuditEntries();
-            int callCount = 0;
             int rejectCount = 0;
-            Map<String, Integer> errorCodes = new LinkedHashMap<String, Integer>();
+            Map<String, Integer> rejectReasons = new LinkedHashMap<String, Integer>();
             for (String auditEntry : recentAuditEntries) {
                 if (!"compliance".equals(extractJsonString(auditEntry, "service"))) {
                     continue;
                 }
-                if ("ALLOW".equals(extractJsonString(auditEntry, "decision"))) {
-                    callCount += 1;
-                } else {
-                    rejectCount += 1;
-                    String reason = extractJsonString(auditEntry, "reason");
-                    if (!reason.isEmpty()) {
-                        Integer count = errorCodes.containsKey(reason) ? errorCodes.get(reason) : 0;
-                        errorCodes.put(reason, count + 1);
-                    }
+                if (!"DENY".equals(extractJsonString(auditEntry, "decision"))) {
+                    continue;
+                }
+                rejectCount += 1;
+                String reason = extractJsonString(auditEntry, "reason");
+                if (!reason.isEmpty()) {
+                    Integer count = rejectReasons.containsKey(reason) ? rejectReasons.get(reason) : 0;
+                    rejectReasons.put(reason, count + 1);
                 }
             }
             String itemsJson = extractRawJson(capabilitiesJson, "items");
+            String statsJson = extractRawJson(capabilitiesJson, "stats");
             return jsonObject(mapOf(
                     "items", itemsJson,
-                    "stats", jsonObject(mapOf(
-                            "call_count", callCount,
-                            "rejected_count", rejectCount,
-                            "error_codes", jsonObject(integerMapToObjectMap(errorCodes))
+                    "stats", statsJson,
+                    "gateway_rejects", jsonObject(mapOf(
+                            "count", rejectCount,
+                            "error_codes", jsonObject(integerMapToObjectMap(rejectReasons))
                     ))
             ));
         }
