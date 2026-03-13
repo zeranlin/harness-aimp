@@ -17,12 +17,16 @@ Client quota config:
 - `client.<name>.requests_per_minute=<default_quota>`
 - `client.<name>.service.<service>.requests_per_minute=<service_quota_override>`
 
+Route health config:
+- `service.<name>.health_url=<upstream_health_endpoint>`
+
 API:
 - `GET /health`
 - `GET|POST /gateway/v1/invoke?service=<qa|compliance|pricing>`
 - `GET /ops/metrics/overview`
 - `GET /ops/audits`
 - `GET /ops/config`
+- `GET /ops/upstreams`
 
 Headers:
 - `x-api-key: demo-key-ops`
@@ -39,3 +43,4 @@ Capabilities:
 - 路由与客户端策略配置化
 - 审计日志持久化到文件
 - 按客户端 + 服务粒度限流
+- Upstream 健康探测与短时熔断

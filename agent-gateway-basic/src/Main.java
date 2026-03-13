@@ -73,6 +73,12 @@ public class Main {
                 return GatewayResponse.ok(app.configJson());
             }
         }));
+        server.createContext("/ops/upstreams", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) {
+                return GatewayResponse.ok(app.upstreamsJson());
+            }
+        }));
         server.setExecutor(null);
         System.out.println("agent-gateway-basic listening on " + PORT);
         server.start();
@@ -132,6 +138,8 @@ public class Main {
         assertContains(config, "\"client\":\"ops\"", "config endpoint should expose clients");
         String audits = app.auditJson();
         assertContains(audits, "\"decision\":\"ALLOW\"", "audit endpoint should expose persisted entries");
+        String upstreams = app.upstreamsJson();
+        assertContains(upstreams, "\"service\":\"qa\"", "upstream endpoint should expose services");
     }
 
     private static UpstreamInvoker fakeInvoker() {
@@ -144,6 +152,11 @@ public class Main {
                         "upstream_url", route.invokeUrl,
                         "request_method", request.method
                 )));
+            }
+
+            @Override
+            public boolean checkHealth(RouteConfig route) {
+                return true;
             }
         };
     }
@@ -158,9 +171,9 @@ public class Main {
 
     private static Map<String, RouteConfig> defaultRoutes() {
         Map<String, RouteConfig> routes = new LinkedHashMap<String, RouteConfig>();
-        routes.put("qa", new RouteConfig("qa", "agent-business-solution", "http://127.0.0.1:8002/invoke"));
-        routes.put("compliance", new RouteConfig("compliance", "atomic-ai-service", "http://127.0.0.1:8003/invoke"));
-        routes.put("pricing", new RouteConfig("pricing", "agent-model-runtime", "http://127.0.0.1:8081/invoke"));
+        routes.put("qa", new RouteConfig("qa", "agent-business-solution", "http://127.0.0.1:8002/invoke", "http://127.0.0.1:8002/health"));
+        routes.put("compliance", new RouteConfig("compliance", "atomic-ai-service", "http://127.0.0.1:8003/invoke", "http://127.0.0.1:8003/health"));
+        routes.put("pricing", new RouteConfig("pricing", "agent-model-runtime", "http://127.0.0.1:8081/invoke", "http://127.0.0.1:8081/health"));
         return routes;
     }
 
@@ -181,6 +194,7 @@ public class Main {
         private final Map<String, RouteConfig> routesByService;
         private final Map<String, RateWindow> windowsByQuotaKey = new ConcurrentHashMap<String, RateWindow>();
         private final Map<String, ServiceMetrics> metricsByService = new ConcurrentHashMap<String, ServiceMetrics>();
+        private final Map<String, CircuitBreakerState> circuitStates = new ConcurrentHashMap<String, CircuitBreakerState>();
         private final Deque<AuditEvent> auditEvents = new ArrayDeque<AuditEvent>();
         private final File auditLogFile;
         private final UpstreamInvoker upstreamInvoker;
@@ -269,9 +283,27 @@ public class Main {
                 )));
             }
 
+            CircuitBreakerState circuit = circuitStates.containsKey(service) ? circuitStates.get(service) : new CircuitBreakerState();
+            circuitStates.put(service, circuit);
+            if (circuit.isOpen()) {
+                recordAudit(clientName, service, "DENY", "circuit_open", startedAt, 503);
+                incrementMetric(service, false, startedAt);
+                return GatewayResponse.json(503, jsonObject(mapOf(
+                        "status", "error",
+                        "message", "upstream circuit open",
+                        "service", service,
+                        "retry_after_ms", circuit.remainingOpenMillis()
+                )));
+            }
+
             GatewayResponse upstreamResponse = upstreamInvoker.invoke(route, request);
             int statusCode = upstreamResponse.statusCode;
             boolean authorized = statusCode >= 200 && statusCode < 300;
+            if (authorized) {
+                circuit.recordSuccess();
+            } else {
+                circuit.recordFailure();
+            }
             recordAudit(clientName, service, authorized ? "ALLOW" : "DENY",
                     authorized ? "forwarded" : "upstream_error", startedAt, statusCode);
             incrementMetric(service, authorized, startedAt);
@@ -311,7 +343,8 @@ public class Main {
                 routes.add(jsonObject(mapOf(
                         "service", route.service,
                         "upstream", route.upstreamName,
-                        "invoke_url", route.invokeUrl
+                        "invoke_url", route.invokeUrl,
+                        "health_url", route.healthUrl
                 )));
             }
 
@@ -328,6 +361,26 @@ public class Main {
                     "routes", "[" + String.join(",", routes) + "]",
                     "clients", "[" + String.join(",", clients) + "]"
             ));
+        }
+
+        String upstreamsJson() {
+            List<String> items = new ArrayList<String>();
+            for (RouteConfig route : routesByService.values()) {
+                CircuitBreakerState state = circuitStates.containsKey(route.service)
+                        ? circuitStates.get(route.service)
+                        : new CircuitBreakerState();
+                circuitStates.put(route.service, state);
+                items.add(jsonObject(mapOf(
+                        "service", route.service,
+                        "upstream", route.upstreamName,
+                        "health_url", route.healthUrl,
+                        "healthy", upstreamInvoker.checkHealth(route),
+                        "circuit_state", state.isOpen() ? "OPEN" : "CLOSED",
+                        "consecutive_failures", state.consecutiveFailures,
+                        "open_until", state.openUntil == null ? "" : state.openUntil.toString()
+                )));
+            }
+            return jsonObject(mapOf("items", "[" + String.join(",", items) + "]"));
         }
 
         private void incrementMetric(String service, boolean authorized, Instant startedAt) {
@@ -443,7 +496,8 @@ public class Main {
                 routes.put(service, new RouteConfig(
                         service,
                         required(properties, "service." + service + ".upstream_name"),
-                        required(properties, "service." + service + ".invoke_url")
+                        required(properties, "service." + service + ".invoke_url"),
+                        required(properties, "service." + service + ".health_url")
                 ));
             }
             return routes;
@@ -535,6 +589,26 @@ public class Main {
             }
             return request.body;
         }
+
+        @Override
+        public boolean checkHealth(RouteConfig route) {
+            HttpURLConnection connection = null;
+            try {
+                URL url = new URL(route.healthUrl);
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(1000);
+                connection.setReadTimeout(1000);
+                int statusCode = connection.getResponseCode();
+                return statusCode >= 200 && statusCode < 300;
+            } catch (IOException exception) {
+                return false;
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        }
     }
 
     private static final class InvokeHandler implements HttpHandler {
@@ -568,20 +642,62 @@ public class Main {
         GatewayResponse handle(HttpExchange exchange) throws IOException;
     }
 
-    @FunctionalInterface
     private interface UpstreamInvoker {
         GatewayResponse invoke(RouteConfig route, GatewayRequest request);
+
+        boolean checkHealth(RouteConfig route);
     }
 
     private static final class RouteConfig {
         private final String service;
         private final String upstreamName;
         private final String invokeUrl;
+        private final String healthUrl;
 
-        private RouteConfig(String service, String upstreamName, String invokeUrl) {
+        private RouteConfig(String service, String upstreamName, String invokeUrl, String healthUrl) {
             this.service = service;
             this.upstreamName = upstreamName;
             this.invokeUrl = invokeUrl;
+            this.healthUrl = healthUrl;
+        }
+    }
+
+    private static final class CircuitBreakerState {
+        private static final int FAILURE_THRESHOLD = 2;
+        private static final long OPEN_MILLIS = 30_000L;
+        private int consecutiveFailures;
+        private Instant openUntil;
+
+        synchronized boolean isOpen() {
+            if (openUntil == null) {
+                return false;
+            }
+            if (Instant.now().isAfter(openUntil)) {
+                openUntil = null;
+                consecutiveFailures = 0;
+                return false;
+            }
+            return true;
+        }
+
+        synchronized void recordSuccess() {
+            consecutiveFailures = 0;
+            openUntil = null;
+        }
+
+        synchronized void recordFailure() {
+            consecutiveFailures += 1;
+            if (consecutiveFailures >= FAILURE_THRESHOLD) {
+                openUntil = Instant.now().plusMillis(OPEN_MILLIS);
+            }
+        }
+
+        synchronized long remainingOpenMillis() {
+            if (openUntil == null) {
+                return 0L;
+            }
+            long remaining = Duration.between(Instant.now(), openUntil).toMillis();
+            return remaining > 0 ? remaining : 0L;
         }
     }
 
