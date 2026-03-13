@@ -454,29 +454,45 @@ async function renderRoute(route) {
 
 async function sendDebugRequest() {
   const service = document.getElementById("service").value;
-  const payload = await getJson(`/debug/request?service=${encodeURIComponent(service)}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": document.getElementById("api-key").value,
-      "x-tenant-id": document.getElementById("tenant-id").value,
-      "x-operator-id": document.getElementById("operator-id").value,
-    },
-    body: document.getElementById("request-body").value,
-  });
-  const requestId = (() => {
-    try {
-      return JSON.parse(document.getElementById("request-body").value).request_id || "";
-    } catch (error) {
-      return "";
+  const transformedNode = document.getElementById("transformed-request");
+  const gatewayNode = document.getElementById("gateway-response");
+  const traceNode = document.getElementById("trace-response");
+  transformedNode.textContent = "正在生成契约并发送请求...";
+  gatewayNode.textContent = "等待网关响应...";
+  traceNode.textContent = "等待链路追踪结果...";
+  try {
+    const payload = await getJson(`/debug/request?service=${encodeURIComponent(service)}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": document.getElementById("api-key").value,
+        "x-tenant-id": document.getElementById("tenant-id").value,
+        "x-operator-id": document.getElementById("operator-id").value,
+      },
+      body: document.getElementById("request-body").value,
+    });
+    const requestId = (() => {
+      try {
+        return JSON.parse(document.getElementById("request-body").value).request_id || "";
+      } catch (error) {
+        return "";
+      }
+    })();
+    if (requestId) {
+      document.getElementById("trace-id").value = requestId;
     }
-  })();
-  if (requestId) {
-    document.getElementById("trace-id").value = requestId;
+    transformedNode.textContent = pretty(payload.transformed_request || payload);
+    gatewayNode.textContent = pretty(payload.gateway_response || payload);
+    traceNode.textContent = pretty(payload.chain_trace || payload);
+  } catch (error) {
+    const failure = {
+      status: "error",
+      message: error.message || "调试请求失败",
+    };
+    transformedNode.textContent = pretty(failure);
+    gatewayNode.textContent = pretty(failure);
+    traceNode.textContent = pretty(failure);
   }
-  document.getElementById("transformed-request").textContent = pretty(payload.transformed_request || payload);
-  document.getElementById("gateway-response").textContent = pretty(payload.gateway_response || payload);
-  document.getElementById("trace-response").textContent = pretty(payload.chain_trace || {});
 }
 
 async function loadTrace() {
