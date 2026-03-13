@@ -37,8 +37,13 @@ API:
 - `GET /ops/l2/scenarios`
 - `GET /ops/l3/capabilities`
 - `GET /ops/l4/runtime`
+- `GET /ops/l5/knowledge`
+- `GET /ops/l6/models`
+- `GET /ops/l7/platform`
 - `POST /ops/reload`
 - `POST /debug/request?service=<qa|compliance|pricing>`
+- `GET /debug/trace/{request_id}`
+- `POST /debug/replay/{request_id}`
 
 Headers:
 - `x-api-key: demo-key-ops`
@@ -81,5 +86,6 @@ Capabilities:
 - Compliance 与 Pricing 请求契约已分别对齐到 L3/L4 标准接口
 - `/ops/overview` 已包含契约转换统计
 - `/ops/overview` 已包含按契约类型聚合的错误码统计
-- 已提供 L1 控制台 MVP：Dashboard、Debug Studio、Scenarios、Model Runtime
-- 已提供 L2-L4 聚合接口，供控制台读取
+- 已提供路由式控制台页面：`/console/dashboard`、`/console/debug`、`/console/scenarios`、`/console/runtime`、`/console/knowledge`、`/console/models`、`/console/platform`
+- 已提供 L2-L7 聚合接口，供控制台读取
+- 已提供 trace / replay 调试能力

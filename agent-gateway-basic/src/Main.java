@@ -118,6 +118,24 @@ public class Main {
                 return GatewayResponse.ok(app.l4RuntimeJson());
             }
         }));
+        server.createContext("/ops/l5/knowledge", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) {
+                return GatewayResponse.ok(app.l5KnowledgeJson());
+            }
+        }));
+        server.createContext("/ops/l6/models", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) {
+                return GatewayResponse.ok(app.l6ModelsJson());
+            }
+        }));
+        server.createContext("/ops/l7/platform", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) {
+                return GatewayResponse.ok(app.l7PlatformJson());
+            }
+        }));
         server.createContext("/ops/reload", new JsonHandler(new ExchangeProcessor() {
             @Override
             public GatewayResponse handle(HttpExchange exchange) throws IOException {
@@ -140,6 +158,24 @@ public class Main {
                     )));
                 }
                 return GatewayResponse.ok(app.debugRequestJson(GatewayRequest.fromExchange(exchange)));
+            }
+        }));
+        server.createContext("/debug/trace", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) {
+                return GatewayResponse.ok(app.traceByPath(exchange.getRequestURI().getPath()));
+            }
+        }));
+        server.createContext("/debug/replay", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) {
+                if (!"POST".equals(exchange.getRequestMethod())) {
+                    return GatewayResponse.json(405, jsonObject(mapOf(
+                            "status", "error",
+                            "message", "method not allowed"
+                    )));
+                }
+                return GatewayResponse.ok(app.replayByPath(exchange.getRequestURI().getPath()));
             }
         }));
         server.createContext("/", new ConsoleIndexHandler(app.projectRoot));
@@ -227,6 +263,9 @@ public class Main {
         assertContains(app.l2ScenariosJson(), "\"status\":\"error\"", "l2 scenarios fallback should stay machine-readable");
         assertContains(app.l3CapabilitiesJson(), "\"status\":\"error\"", "l3 capabilities fallback should stay machine-readable");
         assertContains(app.l4RuntimeJson(), "\"status\":\"error\"", "l4 runtime fallback should stay machine-readable");
+        assertContains(app.l5KnowledgeJson(), "\"status\":\"error\"", "l5 knowledge fallback should stay machine-readable");
+        assertContains(app.l6ModelsJson(), "\"status\":\"error\"", "l6 models fallback should stay machine-readable");
+        assertContains(app.l7PlatformJson(), "\"service\":\"agent-platform-foundation\"", "l7 platform endpoint should be available");
         String debugRequest = app.debugRequestJson(new GatewayRequest(
                 "POST",
                 "/debug/request",
@@ -236,6 +275,7 @@ public class Main {
         ));
         assertContains(debugRequest, "\"target_contract\":\"L2.intelligent_qa\"", "debug request should expose target contract");
         assertContains(debugRequest, "\"question\":\"debug me\"", "debug request should expose transformed payload");
+        assertContains(debugRequest, "\"request_id\":\"", "debug request should include a request id in transformed payload");
         String reload = app.reloadWithConfig(new GatewayDiskConfig(
                 defaultRoutes(),
                 defaultProfiles(),
@@ -305,33 +345,35 @@ public class Main {
         private final File projectRoot;
         private final File auditLogFile;
         private final File metricsLogFile;
+        private final File traceLogFile;
         private final UpstreamInvoker upstreamInvoker;
 
-        private GatewayApp(File projectRoot, GatewayConfigSnapshot configSnapshot, File auditLogFile, File metricsLogFile, UpstreamInvoker upstreamInvoker) {
+        private GatewayApp(File projectRoot, GatewayConfigSnapshot configSnapshot, File auditLogFile, File metricsLogFile, File traceLogFile, UpstreamInvoker upstreamInvoker) {
             this.projectRoot = projectRoot;
             this.configSnapshot = configSnapshot;
             this.auditLogFile = auditLogFile;
             this.metricsLogFile = metricsLogFile;
+            this.traceLogFile = traceLogFile;
             this.upstreamInvoker = upstreamInvoker;
         }
 
         static GatewayApp fromDisk(UpstreamInvoker upstreamInvoker) throws IOException {
             File root = projectRoot();
             GatewayDiskConfig config = GatewayDiskConfig.load(root);
-            return fromConfig(root, config.routesByService, config.clientProfiles, config.auditLogFile, config.metricsLogFile, upstreamInvoker);
+            return fromConfig(root, config.routesByService, config.clientProfiles, config.auditLogFile, config.metricsLogFile, new File(root, "data/traces.log"), upstreamInvoker);
         }
 
         static GatewayApp fromConfig(Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, UpstreamInvoker upstreamInvoker) {
             File root = projectRoot();
-            return fromConfig(root, routesByService, profiles, new File(root, "data/audits.log"), new File(root, "data/metrics.log"), upstreamInvoker);
+            return fromConfig(root, routesByService, profiles, new File(root, "data/audits.log"), new File(root, "data/metrics.log"), new File(root, "data/traces.log"), upstreamInvoker);
         }
 
         static GatewayApp fromConfig(Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, File auditLogFile, UpstreamInvoker upstreamInvoker) {
-            return fromConfig(projectRoot(), routesByService, profiles, auditLogFile, new File(projectRoot(), "data/metrics.log"), upstreamInvoker);
+            return fromConfig(projectRoot(), routesByService, profiles, auditLogFile, new File(projectRoot(), "data/metrics.log"), new File(projectRoot(), "data/traces.log"), upstreamInvoker);
         }
 
-        static GatewayApp fromConfig(File projectRoot, Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, File auditLogFile, File metricsLogFile, UpstreamInvoker upstreamInvoker) {
-            return new GatewayApp(projectRoot, GatewayConfigSnapshot.from(routesByService, profiles), auditLogFile, metricsLogFile, upstreamInvoker);
+        static GatewayApp fromConfig(File projectRoot, Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, File auditLogFile, File metricsLogFile, File traceLogFile, UpstreamInvoker upstreamInvoker) {
+            return new GatewayApp(projectRoot, GatewayConfigSnapshot.from(routesByService, profiles), auditLogFile, metricsLogFile, traceLogFile, upstreamInvoker);
         }
 
         GatewayResponse invoke(GatewayRequest request) {
@@ -409,6 +451,7 @@ public class Main {
             }
 
             recordContractTransform(service);
+            String transformedPayload = buildUpstreamPayload(route, request);
             GatewayResponse upstreamResponse = upstreamInvoker.invoke(route, request);
             int statusCode = upstreamResponse.statusCode;
             boolean authorized = statusCode >= 200 && statusCode < 300;
@@ -420,8 +463,7 @@ public class Main {
             recordAudit(clientName, service, authorized ? "ALLOW" : "DENY",
                     authorized ? "forwarded" : "upstream_error", startedAt, statusCode);
             incrementMetric(service, authorized, startedAt);
-
-            return GatewayResponse.json(statusCode, jsonObject(mapOf(
+            String responseBody = jsonObject(mapOf(
                     "status", authorized ? "ok" : "error",
                     "routed_service", service,
                     "client", clientName,
@@ -429,7 +471,18 @@ public class Main {
                     "upstream_url", route.invokeUrl,
                     "duration_ms", Duration.between(startedAt, Instant.now()).toMillis(),
                     "upstream_response", upstreamResponse.body
-            )));
+            ));
+            appendTrace(new TraceEvent(
+                    Instant.now(),
+                    extractJsonString(transformedPayload, "request_id"),
+                    service,
+                    contractTarget(service),
+                    request.headers,
+                    request.body,
+                    transformedPayload,
+                    responseBody
+            ));
+            return GatewayResponse.json(statusCode, responseBody);
         }
 
         String metricsJson() {
@@ -554,6 +607,32 @@ public class Main {
             )));
         }
 
+        String l5KnowledgeJson() {
+            return fetchJson("http://127.0.0.1:8004/ops/knowledge", jsonObject(mapOf(
+                    "status", "error",
+                    "message", "l5 unavailable"
+            )));
+        }
+
+        String l6ModelsJson() {
+            return fetchJson("http://127.0.0.1:8005/ops/models", jsonObject(mapOf(
+                    "status", "error",
+                    "message", "l6 unavailable"
+            )));
+        }
+
+        String l7PlatformJson() {
+            File root = new File(projectRoot, "../agent-platform-foundation");
+            return jsonObject(mapOf(
+                    "status", "UP",
+                    "service", "agent-platform-foundation",
+                    "healthcheck", scriptOk(new File(root, "scripts/healthcheck.sh")),
+                    "build_ready", scriptOk(new File(root, "scripts/build.sh")),
+                    "test_ready", scriptOk(new File(root, "scripts/test.sh")),
+                    "run_ready", scriptOk(new File(root, "scripts/run.sh"))
+            ));
+        }
+
         String debugRequestJson(GatewayRequest request) {
             String service = request.queryParams.containsKey("service") ? request.queryParams.get("service") : "qa";
             RouteConfig route = configSnapshot.routesByService.get(service);
@@ -578,6 +657,43 @@ public class Main {
                     "target_contract", contractTarget(service),
                     "transformed_request", transformedPayload,
                     "gateway_response", gatewayResponse.body
+            ));
+        }
+
+        String traceByPath(String path) {
+            String requestId = path.substring("/debug/trace/".length());
+            if (requestId.trim().isEmpty()) {
+                return jsonObject(mapOf("status", "error", "message", "missing request id"));
+            }
+            String trace = findTrace(requestId);
+            if (trace == null) {
+                return jsonObject(mapOf("status", "error", "message", "trace not found", "request_id", requestId));
+            }
+            return trace;
+        }
+
+        String replayByPath(String path) {
+            String requestId = path.substring("/debug/replay/".length());
+            if (requestId.trim().isEmpty()) {
+                return jsonObject(mapOf("status", "error", "message", "missing request id"));
+            }
+            String trace = findTrace(requestId);
+            if (trace == null) {
+                return jsonObject(mapOf("status", "error", "message", "trace not found", "request_id", requestId));
+            }
+            String service = extractJsonString(trace, "service");
+            String originalBody = extractRawJson(trace, "original_body");
+            Map<String, String> headers = stringMapOf(
+                    "x-api-key", "demo-key-ops",
+                    "x-tenant-id", extractJsonString(trace, "tenant_id"),
+                    "x-operator-id", extractJsonString(trace, "operator_id")
+            );
+            GatewayResponse replay = invoke(new GatewayRequest("POST", "/gateway/v1/invoke", stringMapOf("service", service), headers, originalBody));
+            return jsonObject(mapOf(
+                    "status", "ok",
+                    "request_id", requestId,
+                    "service", service,
+                    "replay_response", replay.body
             ));
         }
 
@@ -690,6 +806,54 @@ public class Main {
                     connection.disconnect();
                 }
             }
+        }
+
+        private void appendTrace(TraceEvent event) {
+            File parent = traceLogFile.getParentFile();
+            if (parent != null && !parent.exists()) {
+                parent.mkdirs();
+            }
+            FileWriter writer = null;
+            try {
+                writer = new FileWriter(traceLogFile, true);
+                writer.write(event.toJson());
+                writer.write("\n");
+            } catch (IOException ignored) {
+            } finally {
+                if (writer != null) {
+                    try {
+                        writer.close();
+                    } catch (IOException ignored) {
+                    }
+                }
+            }
+        }
+
+        private String findTrace(String requestId) {
+            if (!traceLogFile.exists()) {
+                return null;
+            }
+            BufferedReader reader = null;
+            String match = null;
+            try {
+                reader = new BufferedReader(new FileReader(traceLogFile));
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.indexOf("\"request_id\":\"" + escapeJson(requestId) + "\"") >= 0) {
+                        match = line;
+                    }
+                }
+            } catch (IOException ignored) {
+                return null;
+            } finally {
+                if (reader != null) {
+                    try {
+                        reader.close();
+                    } catch (IOException ignored) {
+                    }
+                }
+            }
+            return match;
         }
 
         private String contractTransformationsJson() {
@@ -1203,6 +1367,52 @@ public class Main {
         return "";
     }
 
+    private static String extractRawJson(String body, String key) {
+        if (body == null || body.trim().isEmpty()) {
+            return "{}";
+        }
+        String anchor = "\"" + key + "\":";
+        int start = body.indexOf(anchor);
+        if (start < 0) {
+            return "{}";
+        }
+        int valueStart = start + anchor.length();
+        while (valueStart < body.length() && Character.isWhitespace(body.charAt(valueStart))) {
+            valueStart += 1;
+        }
+        if (valueStart >= body.length()) {
+            return "{}";
+        }
+        char first = body.charAt(valueStart);
+        if (first == '"') {
+            int end = body.indexOf("\"", valueStart + 1);
+            while (end > 0 && body.charAt(end - 1) == '\\') {
+                end = body.indexOf("\"", end + 1);
+            }
+            return end < 0 ? "{}" : body.substring(valueStart, end + 1);
+        }
+        if (first != '{' && first != '[') {
+            int end = body.indexOf(",", valueStart);
+            if (end < 0) {
+                end = body.indexOf("}", valueStart);
+            }
+            return end < 0 ? "{}" : body.substring(valueStart, end).trim();
+        }
+        int depth = 0;
+        for (int i = valueStart; i < body.length(); i++) {
+            char c = body.charAt(i);
+            if (c == '{' || c == '[') {
+                depth += 1;
+            } else if (c == '}' || c == ']') {
+                depth -= 1;
+                if (depth == 0) {
+                    return body.substring(valueStart, i + 1);
+                }
+            }
+        }
+        return "{}";
+    }
+
     private static final class InvokeHandler implements HttpHandler {
         private final GatewayApp app;
 
@@ -1239,7 +1449,7 @@ public class Main {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             String path = exchange.getRequestURI().getPath();
-            if (!"/".equals(path) && !"/console".equals(path)) {
+            if (!"/".equals(path) && !path.startsWith("/console")) {
                 writeResponse(exchange, GatewayResponse.json(404, jsonObject(mapOf(
                         "status", "error",
                         "message", "not found"
@@ -1481,6 +1691,43 @@ public class Main {
                     "service", service,
                     "authorized", authorized,
                     "duration_ms", durationMs
+            ));
+        }
+    }
+
+    private static final class TraceEvent {
+        private final Instant timestamp;
+        private final String requestId;
+        private final String service;
+        private final String targetContract;
+        private final Map<String, String> headers;
+        private final String originalBody;
+        private final String transformedRequest;
+        private final String gatewayResponse;
+
+        private TraceEvent(Instant timestamp, String requestId, String service, String targetContract, Map<String, String> headers,
+                           String originalBody, String transformedRequest, String gatewayResponse) {
+            this.timestamp = timestamp;
+            this.requestId = requestId;
+            this.service = service;
+            this.targetContract = targetContract;
+            this.headers = headers;
+            this.originalBody = originalBody;
+            this.transformedRequest = transformedRequest;
+            this.gatewayResponse = gatewayResponse;
+        }
+
+        private String toJson() {
+            return jsonObject(mapOf(
+                    "timestamp", timestamp.toString(),
+                    "request_id", requestId,
+                    "service", service,
+                    "target_contract", targetContract,
+                    "tenant_id", headers.containsKey("x-tenant-id") ? headers.get("x-tenant-id") : "",
+                    "operator_id", headers.containsKey("x-operator-id") ? headers.get("x-operator-id") : "",
+                    "original_body", originalBody,
+                    "transformed_request", transformedRequest,
+                    "gateway_response", gatewayResponse
             ));
         }
     }

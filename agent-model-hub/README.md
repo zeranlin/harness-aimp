@@ -8,3 +8,6 @@ Entrypoints:
 - scripts/run.sh
 - scripts/healthcheck.sh
 
+API:
+- `GET /health`
+- `GET /ops/models`
