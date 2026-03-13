@@ -25,3 +25,4 @@ Capabilities:
 - 按客户端每分钟限流
 - 审计记录
 - 运营指标汇总
+- HTTP upstream 转发到 L2/L3/L4

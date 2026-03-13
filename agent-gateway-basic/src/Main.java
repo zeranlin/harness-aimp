@@ -3,12 +3,14 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.ByteArrayOutputStream;
+import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -31,7 +33,7 @@ public class Main {
     public static void main(String[] args) throws Exception {
         GatewayApp app = GatewayApp.defaultApp();
         if (args.length > 0 && "--self-test".equals(args[0])) {
-            runSelfTest(app);
+            runSelfTest();
             System.out.println("self-test ok");
             return;
         }
@@ -55,9 +57,11 @@ public class Main {
         server.start();
     }
 
-    private static void runSelfTest(GatewayApp app) {
+    private static void runSelfTest() {
+        GatewayApp app = GatewayApp.withInvoker(defaultProfiles(), fakeInvoker());
+
         GatewayResponse missingKey = app.invoke(new GatewayRequest("GET", "/gateway/v1/invoke",
-                stringMapOf("service", "qa"), Collections.emptyMap(), ""));
+                stringMapOf("service", "qa"), Collections.<String, String>emptyMap(), ""));
         assertEquals(401, missingKey.statusCode, "missing api key should fail");
 
         GatewayResponse badKey = app.invoke(new GatewayRequest("GET", "/gateway/v1/invoke",
@@ -71,14 +75,14 @@ public class Main {
         GatewayResponse ok = app.invoke(new GatewayRequest("POST", "/gateway/v1/invoke",
                 stringMapOf("service", "qa"), stringMapOf("x-api-key", "demo-key-ops"), "{\"prompt\":\"test\"}"));
         assertEquals(200, ok.statusCode, "authorized request should pass");
-        assertContains(ok.body, "\"status\":\"ok\"", "success response should be present");
+        assertContains(ok.body, "\"provider\":\"agent-business-solution\"", "response should come from upstream");
 
-        GatewayApp limitApp = GatewayApp.withSingleClient(new ClientProfile(
+        GatewayApp limitApp = GatewayApp.withInvoker(Collections.singletonList(new ClientProfile(
                 "limited",
                 "demo-key-limited",
                 1,
                 setOf("qa")
-        ));
+        )), fakeInvoker());
         GatewayResponse first = limitApp.invoke(new GatewayRequest("GET", "/gateway/v1/invoke",
                 stringMapOf("service", "qa"), stringMapOf("x-api-key", "demo-key-limited"), ""));
         GatewayResponse second = limitApp.invoke(new GatewayRequest("GET", "/gateway/v1/invoke",
@@ -91,6 +95,28 @@ public class Main {
         String audits = app.auditJson();
         assertContains(audits, "\"decision\":\"ALLOW\"", "audit log should include allow");
         assertContains(audits, "\"decision\":\"DENY\"", "audit log should include deny");
+    }
+
+    private static UpstreamInvoker fakeInvoker() {
+        return new UpstreamInvoker() {
+            @Override
+            public GatewayResponse invoke(RouteConfig route, GatewayRequest request) {
+                return GatewayResponse.ok(jsonObject(mapOf(
+                        "status", "ok",
+                        "provider", route.upstreamName,
+                        "upstream_url", route.invokeUrl,
+                        "request_method", request.method
+                )));
+            }
+        };
+    }
+
+    private static List<ClientProfile> defaultProfiles() {
+        return Arrays.asList(
+                new ClientProfile("ops", "demo-key-ops", 60, setOf("qa", "compliance", "pricing")),
+                new ClientProfile("business", "demo-key-business", 30, setOf("qa", "compliance")),
+                new ClientProfile("partner", "demo-key-partner", 10, setOf("qa"))
+        );
     }
 
     private static void assertEquals(int expected, int actual, String message) {
@@ -139,6 +165,11 @@ public class Main {
         GatewayResponse handle(HttpExchange exchange) throws IOException;
     }
 
+    @FunctionalInterface
+    private interface UpstreamInvoker {
+        GatewayResponse invoke(RouteConfig route, GatewayRequest request);
+    }
+
     private static void writeResponse(HttpExchange exchange, GatewayResponse response) throws IOException {
         byte[] bytes = response.body.getBytes(StandardCharsets.UTF_8);
         Headers headers = exchange.getResponseHeaders();
@@ -152,34 +183,33 @@ public class Main {
 
     private static final class GatewayApp {
         private final Map<String, ClientProfile> profilesByApiKey;
-        private final Map<String, RateWindow> windowsByClient = new ConcurrentHashMap<>();
-        private final Map<String, ServiceMetrics> metricsByService = new ConcurrentHashMap<>();
-        private final Deque<AuditEvent> auditEvents = new ArrayDeque<>();
+        private final Map<String, RouteConfig> routesByService;
+        private final Map<String, RateWindow> windowsByClient = new ConcurrentHashMap<String, RateWindow>();
+        private final Map<String, ServiceMetrics> metricsByService = new ConcurrentHashMap<String, ServiceMetrics>();
+        private final Deque<AuditEvent> auditEvents = new ArrayDeque<AuditEvent>();
+        private final UpstreamInvoker upstreamInvoker;
 
-        private GatewayApp(List<ClientProfile> profiles) {
-            Map<String, ClientProfile> profilesMap = new LinkedHashMap<>();
+        private GatewayApp(List<ClientProfile> profiles, UpstreamInvoker upstreamInvoker) {
+            Map<String, ClientProfile> profilesMap = new LinkedHashMap<String, ClientProfile>();
             for (ClientProfile profile : profiles) {
                 profilesMap.put(profile.apiKey, profile);
             }
             this.profilesByApiKey = profilesMap;
+            this.routesByService = defaultRoutes();
+            this.upstreamInvoker = upstreamInvoker;
         }
 
         static GatewayApp defaultApp() {
-            List<ClientProfile> profiles = Arrays.asList(
-                    new ClientProfile("ops", "demo-key-ops", 60, setOf("qa", "compliance", "pricing")),
-                    new ClientProfile("business", "demo-key-business", 30, setOf("qa", "compliance")),
-                    new ClientProfile("partner", "demo-key-partner", 10, setOf("qa"))
-            );
-            return new GatewayApp(profiles);
+            return new GatewayApp(defaultProfiles(), new HttpUpstreamInvoker());
         }
 
-        static GatewayApp withSingleClient(ClientProfile profile) {
-            return new GatewayApp(Collections.singletonList(profile));
+        static GatewayApp withInvoker(List<ClientProfile> profiles, UpstreamInvoker upstreamInvoker) {
+            return new GatewayApp(profiles, upstreamInvoker);
         }
 
         GatewayResponse invoke(GatewayRequest request) {
             Instant startedAt = Instant.now();
-            String service = request.queryParams.getOrDefault("service", "qa");
+            String service = request.queryParams.containsKey("service") ? request.queryParams.get("service") : "qa";
             String apiKey = request.header("x-api-key");
             String clientName = "anonymous";
 
@@ -211,7 +241,21 @@ public class Main {
                 )));
             }
 
-            RateWindow window = windowsByClient.computeIfAbsent(clientName, ignored -> new RateWindow());
+            RouteConfig route = routesByService.get(service);
+            if (route == null) {
+                recordAudit(clientName, service, "DENY", "route_not_found", startedAt, 404);
+                incrementMetric(service, false, startedAt);
+                return GatewayResponse.json(404, jsonObject(mapOf(
+                        "status", "error",
+                        "message", "unknown service",
+                        "service", service
+                )));
+            }
+
+            RateWindow window = windowsByClient.containsKey(clientName)
+                    ? windowsByClient.get(clientName)
+                    : new RateWindow();
+            windowsByClient.put(clientName, window);
             if (!window.allow(profile.requestsPerMinute)) {
                 recordAudit(clientName, service, "DENY", "rate_limited", startedAt, 429);
                 incrementMetric(service, false, startedAt);
@@ -222,21 +266,25 @@ public class Main {
                 )));
             }
 
-            recordAudit(clientName, service, "ALLOW", "forwarded", startedAt, 200);
-            incrementMetric(service, true, startedAt);
-            return GatewayResponse.ok(jsonObject(mapOf(
-                    "status", "ok",
+            GatewayResponse upstreamResponse = upstreamInvoker.invoke(route, request);
+            int statusCode = upstreamResponse.statusCode;
+            String decision = statusCode >= 200 && statusCode < 300 ? "ALLOW" : "DENY";
+            String reason = statusCode >= 200 && statusCode < 300 ? "forwarded" : "upstream_error";
+            recordAudit(clientName, service, decision, reason, startedAt, statusCode);
+            incrementMetric(service, statusCode >= 200 && statusCode < 300, startedAt);
+            return GatewayResponse.json(statusCode, jsonObject(mapOf(
+                    "status", statusCode >= 200 && statusCode < 300 ? "ok" : "error",
                     "routed_service", service,
                     "client", clientName,
-                    "upstream", routeTarget(service),
-                    "request_method", request.method,
-                    "body_size", request.body.length(),
-                    "duration_ms", Duration.between(startedAt, Instant.now()).toMillis()
+                    "upstream", route.upstreamName,
+                    "upstream_url", route.invokeUrl,
+                    "duration_ms", Duration.between(startedAt, Instant.now()).toMillis(),
+                    "upstream_response", upstreamResponse.body
             )));
         }
 
         String metricsJson() {
-            List<String> services = new ArrayList<>();
+            List<String> services = new ArrayList<String>();
             for (Map.Entry<String, ServiceMetrics> entry : metricsByService.entrySet()) {
                 ServiceMetrics metrics = entry.getValue();
                 services.add(jsonObject(mapOf(
@@ -250,7 +298,7 @@ public class Main {
         }
 
         String auditJson() {
-            List<String> items = new ArrayList<>();
+            List<String> items = new ArrayList<String>();
             synchronized (auditEvents) {
                 for (AuditEvent event : auditEvents) {
                     items.add(jsonObject(mapOf(
@@ -267,7 +315,10 @@ public class Main {
         }
 
         private void incrementMetric(String service, boolean authorized, Instant startedAt) {
-            ServiceMetrics metrics = metricsByService.computeIfAbsent(service, ignored -> new ServiceMetrics());
+            ServiceMetrics metrics = metricsByService.containsKey(service)
+                    ? metricsByService.get(service)
+                    : new ServiceMetrics();
+            metricsByService.put(service, metrics);
             long durationMs = Duration.between(startedAt, Instant.now()).toMillis();
             metrics.record(authorized, durationMs);
         }
@@ -281,17 +332,67 @@ public class Main {
             }
         }
 
-        private String routeTarget(String service) {
-            switch (service) {
-                case "qa":
-                    return "agent-business-solution";
-                case "compliance":
-                    return "atomic-ai-service";
-                case "pricing":
-                    return "agent-model-runtime";
-                default:
-                    return "unknown";
+        private Map<String, RouteConfig> defaultRoutes() {
+            Map<String, RouteConfig> routes = new LinkedHashMap<String, RouteConfig>();
+            routes.put("qa", new RouteConfig("agent-business-solution", "http://127.0.0.1:8002/invoke"));
+            routes.put("compliance", new RouteConfig("atomic-ai-service", "http://127.0.0.1:8003/invoke"));
+            routes.put("pricing", new RouteConfig("agent-model-runtime", "http://127.0.0.1:8081/invoke"));
+            return routes;
+        }
+    }
+
+    private static final class HttpUpstreamInvoker implements UpstreamInvoker {
+        @Override
+        public GatewayResponse invoke(RouteConfig route, GatewayRequest request) {
+            HttpURLConnection connection = null;
+            try {
+                URL url = new URL(route.invokeUrl);
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("POST");
+                connection.setConnectTimeout(2000);
+                connection.setReadTimeout(3000);
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                byte[] payload = upstreamPayload(request).getBytes(StandardCharsets.UTF_8);
+                OutputStream outputStream = connection.getOutputStream();
+                outputStream.write(payload);
+                outputStream.flush();
+                outputStream.close();
+
+                int statusCode = connection.getResponseCode();
+                InputStream inputStream = statusCode >= 400 ? connection.getErrorStream() : connection.getInputStream();
+                String responseBody = inputStream == null ? "" : readBody(inputStream);
+                return GatewayResponse.json(statusCode, responseBody);
+            } catch (IOException exception) {
+                return GatewayResponse.json(502, jsonObject(mapOf(
+                        "status", "error",
+                        "message", "upstream unavailable",
+                        "detail", exception.getMessage(),
+                        "upstream", route.upstreamName
+                )));
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
             }
+        }
+
+        private String upstreamPayload(GatewayRequest request) {
+            String body = request.body == null ? "" : request.body;
+            if (body.trim().isEmpty()) {
+                return jsonObject(mapOf("prompt", "", "document", ""));
+            }
+            return body;
+        }
+    }
+
+    private static final class RouteConfig {
+        private final String upstreamName;
+        private final String invokeUrl;
+
+        private RouteConfig(String upstreamName, String invokeUrl) {
+            this.upstreamName = upstreamName;
+            this.invokeUrl = invokeUrl;
         }
     }
 
@@ -358,7 +459,7 @@ public class Main {
     }
 
     private static final class RateWindow {
-        private final Deque<Instant> requestTimes = new ArrayDeque<>();
+        private final Deque<Instant> requestTimes = new ArrayDeque<Instant>();
 
         synchronized boolean allow(int requestsPerMinute) {
             Instant cutoff = Instant.now().minusSeconds(60);
@@ -416,7 +517,7 @@ public class Main {
         if (rawQuery == null || rawQuery.trim().isEmpty()) {
             return Collections.emptyMap();
         }
-        Map<String, String> params = new LinkedHashMap<>();
+        Map<String, String> params = new LinkedHashMap<String, String>();
         for (String pair : rawQuery.split("&")) {
             String[] parts = pair.split("=", 2);
             String key = parts[0];
@@ -427,7 +528,7 @@ public class Main {
     }
 
     private static Map<String, String> lowerCaseHeaders(Headers headers) {
-        Map<String, String> values = new LinkedHashMap<>();
+        Map<String, String> values = new LinkedHashMap<String, String>();
         for (Map.Entry<String, List<String>> entry : headers.entrySet()) {
             if (!entry.getValue().isEmpty()) {
                 values.put(entry.getKey().toLowerCase(), entry.getValue().get(0));
@@ -447,14 +548,14 @@ public class Main {
     }
 
     private static Set<String> setOf(String... values) {
-        return new LinkedHashSet<>(Arrays.asList(values));
+        return new LinkedHashSet<String>(Arrays.asList(values));
     }
 
     private static Map<String, String> stringMapOf(String... values) {
         if (values.length % 2 != 0) {
             throw new IllegalArgumentException("stringMapOf requires even number of arguments");
         }
-        Map<String, String> map = new LinkedHashMap<>();
+        Map<String, String> map = new LinkedHashMap<String, String>();
         for (int i = 0; i < values.length; i += 2) {
             map.put(values[i], values[i + 1]);
         }
@@ -465,7 +566,7 @@ public class Main {
         if (values.length % 2 != 0) {
             throw new IllegalArgumentException("mapOf requires even number of arguments");
         }
-        Map<String, Object> map = new LinkedHashMap<>();
+        Map<String, Object> map = new LinkedHashMap<String, Object>();
         for (int i = 0; i < values.length; i += 2) {
             map.put(Objects.toString(values[i]), values[i + 1]);
         }
