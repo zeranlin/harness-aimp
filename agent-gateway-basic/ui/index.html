@@ -180,6 +180,29 @@
       }
       .split { display: grid; grid-template-columns: 0.95fr 1.05fr; gap: 16px; }
       .stack { display: grid; gap: 16px; }
+      .table-wrap {
+        overflow: auto;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,0.72);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        text-align: left;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+      th {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        background: rgba(12, 122, 121, 0.06);
+      }
       @media (max-width: 1040px) {
         .app, .split, .stats, .cards { grid-template-columns: 1fr; }
         .sidebar { position: static; }

@@ -260,11 +260,11 @@ public class Main {
         assertContains(overview, "\"contract_transformations\":", "overview endpoint should expose contract mapping stats");
         assertContains(overview, "\"contract_error_codes\":", "overview endpoint should expose contract error code stats");
         assertContains(app.layersJson(), "\"layer\":\"L2\"", "layers endpoint should expose downstream layers");
-        assertContains(app.l2ScenariosJson(), "\"status\":\"error\"", "l2 scenarios fallback should stay machine-readable");
-        assertContains(app.l3CapabilitiesJson(), "\"status\":\"error\"", "l3 capabilities fallback should stay machine-readable");
-        assertContains(app.l4RuntimeJson(), "\"status\":\"error\"", "l4 runtime fallback should stay machine-readable");
-        assertContains(app.l5KnowledgeJson(), "\"status\":\"error\"", "l5 knowledge fallback should stay machine-readable");
-        assertContains(app.l6ModelsJson(), "\"status\":\"error\"", "l6 models fallback should stay machine-readable");
+        assertContains(app.l2ScenariosJson(), "\"items\":", "l2 scenarios response should stay machine-readable");
+        assertContains(app.l3CapabilitiesJson(), "\"stats\":", "l3 capabilities should expose usage stats");
+        assertContains(app.l4RuntimeJson(), "\"status\":", "l4 runtime response should stay machine-readable");
+        assertContains(app.l5KnowledgeJson(), "\"status\":", "l5 knowledge response should stay machine-readable");
+        assertContains(app.l6ModelsJson(), "\"status\":", "l6 models response should stay machine-readable");
         assertContains(app.l7PlatformJson(), "\"service\":\"agent-platform-foundation\"", "l7 platform endpoint should be available");
         String debugRequest = app.debugRequestJson(new GatewayRequest(
                 "POST",
@@ -593,11 +593,39 @@ public class Main {
         }
 
         String l3CapabilitiesJson() {
-            return fetchJson("http://127.0.0.1:8003/capabilities", jsonObject(mapOf(
+            String capabilitiesJson = fetchJson("http://127.0.0.1:8003/capabilities", jsonObject(mapOf(
                     "status", "error",
                     "message", "l3 unavailable",
                     "items", "[]"
             )));
+            List<String> recentAuditEntries = readRecentAuditEntries();
+            int callCount = 0;
+            int rejectCount = 0;
+            Map<String, Integer> errorCodes = new LinkedHashMap<String, Integer>();
+            for (String auditEntry : recentAuditEntries) {
+                if (!"compliance".equals(extractJsonString(auditEntry, "service"))) {
+                    continue;
+                }
+                if ("ALLOW".equals(extractJsonString(auditEntry, "decision"))) {
+                    callCount += 1;
+                } else {
+                    rejectCount += 1;
+                    String reason = extractJsonString(auditEntry, "reason");
+                    if (!reason.isEmpty()) {
+                        Integer count = errorCodes.containsKey(reason) ? errorCodes.get(reason) : 0;
+                        errorCodes.put(reason, count + 1);
+                    }
+                }
+            }
+            String itemsJson = extractRawJson(capabilitiesJson, "items");
+            return jsonObject(mapOf(
+                    "items", itemsJson,
+                    "stats", jsonObject(mapOf(
+                            "call_count", callCount,
+                            "rejected_count", rejectCount,
+                            "error_codes", jsonObject(integerMapToObjectMap(errorCodes))
+                    ))
+            ));
         }
 
         String l4RuntimeJson() {

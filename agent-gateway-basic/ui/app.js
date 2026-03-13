@@ -1,12 +1,13 @@
 const routes = [
   { path: "/console/dashboard", label: "总览", title: "系统总览", description: "查看七层健康、总览指标与关键异常。" },
+  { path: "/console/gateway", label: "L1 网关层", title: "L1 网关运营", description: "查看网关入口、鉴权、配额、审计与聚合治理结果。" },
+  { path: "/console/scenarios", label: "L2 场景层", title: "L2 场景运营", description: "查看场景编排、状态、依赖和执行入口。" },
+  { path: "/console/capabilities", label: "L3 能力层", title: "L3 原子能力", description: "查看能力目录、调用量、错误码分布与输入输出定义。" },
+  { path: "/console/runtime", label: "L4 运行时", title: "L4 模型运行时", description: "查看模型运行时并发、路由、队列与重试策略。" },
+  { path: "/console/knowledge", label: "L5 知识层", title: "L5 知识运营", description: "查看知识库、流水线与质量状态。" },
+  { path: "/console/models", label: "L6 模型层", title: "L6 模型中心", description: "查看模型注册、评测和成本基线。" },
+  { path: "/console/platform", label: "L7 平台层", title: "L7 平台底座", description: "查看平台脚本健康和底座可用性。" },
   { path: "/console/debug", label: "调试台", title: "调试工作台", description: "构造请求、查看契约转换、Trace 与 Replay。" },
-  { path: "/console/scenarios", label: "场景层", title: "L2 场景运营", description: "查看场景编排、状态与执行入口。" },
-  { path: "/console/capabilities", label: "能力层", title: "L3 原子能力", description: "查看能力目录、状态、输入输出与原子能力定义。" },
-  { path: "/console/runtime", label: "运行时", title: "L4 模型运行时", description: "查看模型运行时并发、路由与重试策略。" },
-  { path: "/console/knowledge", label: "知识运营", title: "L5 知识运营", description: "查看知识库与数据流水线状态。" },
-  { path: "/console/models", label: "模型中心", title: "L6 模型中心", description: "查看模型注册、评测与成本基线。" },
-  { path: "/console/platform", label: "平台底座", title: "L7 平台底座", description: "查看基础设施、脚本健康与底座状态。" },
 ];
 
 async function getJson(url, options = {}) {
@@ -37,17 +38,31 @@ function sectionCard(title, body, tone = "") {
   return `<div class="card ${tone}"><div class="label">${title}</div><div style="margin-top:8px;color:var(--muted);line-height:1.55;">${body}</div></div>`;
 }
 
+function table(headers, rows) {
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>${headers.map((item) => `<th>${item}</th>`).join("")}</tr></thead>
+        <tbody>${rows.join("") || `<tr><td colspan="${headers.length}">暂无数据</td></tr>`}</tbody>
+      </table>
+    </div>
+  `;
+}
+
 function pretty(payload) {
   return JSON.stringify(payload, null, 2);
+}
+
+function renderLayerCards(items) {
+  return (items || []).map((item) =>
+    sectionCard(`${item.layer} · ${item.project}`, `${item.status} · ${item.health_mode}<br/>${item.target}`, item.healthy ? "good" : "bad")
+  ).join("");
 }
 
 async function renderDashboard() {
   const [overview, layers] = await Promise.all([getJson("/ops/overview"), getJson("/ops/layers")]);
   const services = overview.metrics?.services || [];
   const audit = overview.audit_summary || {};
-  const layerCards = (layers.items || []).map((item) =>
-    sectionCard(`${item.layer} · ${item.project}`, `${item.status} · ${item.health_mode}<br/>${item.target}`, item.healthy ? "good" : "bad")
-  ).join("");
   return `
     <div class="toolbar"><h2>运营快照</h2><button id="refresh-dashboard">刷新</button></div>
     <div class="grid stats" style="margin-top:16px;">
@@ -56,7 +71,26 @@ async function renderDashboard() {
       ${card("允许请求", audit.allow || 0)}
       ${card("拒绝请求", audit.deny || 0)}
     </div>
-    <div class="grid cards" style="margin-top:16px;">${layerCards}</div>
+    <div class="grid cards" style="margin-top:16px;">${renderLayerCards(layers.items)}</div>
+  `;
+}
+
+async function renderGateway() {
+  const overview = await getJson("/ops/overview");
+  const services = overview.metrics?.services || [];
+  const audit = overview.audit_summary || {};
+  const transformRows = (overview.contract_transformations?.items || []).map((item) =>
+    `<tr><td>${item.service}</td><td>${item.target}</td><td>${item.transform_count}</td></tr>`
+  );
+  return `
+    <div class="toolbar"><h2>网关运营</h2><button id="refresh-gateway">刷新</button></div>
+    <div class="grid stats" style="margin-top:16px;">
+      ${card("服务数", services.length)}
+      ${card("允许", audit.allow || 0)}
+      ${card("拒绝", audit.deny || 0)}
+      ${card("审计总数", audit.total || 0)}
+    </div>
+    <div style="margin-top:16px;">${table(["服务", "目标契约", "转换次数"], transformRows)}</div>
   `;
 }
 
@@ -89,74 +123,126 @@ async function renderDebug() {
 async function renderScenarios() {
   const payload = await getJson("/ops/l2/scenarios");
   const items = payload.items || [];
+  const rows = items.map((item) =>
+    `<tr><td>${item.scenario_code}</td><td>${item.name}</td><td>${item.status}</td><td>${item.orchestrator_type}</td><td>${(item.dependencies || []).join(", ")}</td></tr>`
+  );
   return `
     <div class="toolbar"><h2>场景注册表</h2><button id="refresh-scenarios">刷新</button></div>
-    <div class="grid cards" style="margin-top:16px;">
-      ${items.map((item) => sectionCard(item.scenario_code, `${item.name} · ${item.status} · ${item.orchestrator_type}<br/>依赖服务：${(item.dependencies || []).join(", ")}`)).join("") || sectionCard("状态", payload.message || "暂无场景")}
+    <div class="grid stats" style="margin-top:16px;">
+      ${card("场景数", items.length)}
+      ${card("活动场景", items.filter((item) => item.status === "active").length)}
+      ${card("依赖总数", items.reduce((sum, item) => sum + (item.dependencies || []).length, 0))}
+      ${card("编排类型", [...new Set(items.map((item) => item.orchestrator_type))].length)}
     </div>
+    <div style="margin-top:16px;">${table(["场景编码", "名称", "状态", "编排类型", "依赖服务"], rows)}</div>
   `;
 }
 
 async function renderCapabilities() {
   const payload = await getJson("/ops/l3/capabilities");
   const items = payload.items || [];
+  const stats = payload.stats || {};
+  const rows = items.map((item) =>
+    `<tr><td>${item.capability_code}</td><td>${item.name}</td><td>${item.status}</td><td>${(item.input || []).join(", ")}</td><td>${(item.outputs || []).join(", ")}</td></tr>`
+  );
+  const errorRows = Object.entries(stats.error_codes || {}).map(
+    ([code, count]) => `<tr><td>${code}</td><td>${count}</td></tr>`
+  );
   return `
     <div class="toolbar"><h2>原子能力目录</h2><button id="refresh-capabilities">刷新</button></div>
-    <div class="grid cards" style="margin-top:16px;">
-      ${items.map((item) => sectionCard(item.capability_code, `${item.name} · ${item.status}<br/>输入：${(item.input || []).join(", ")}<br/>输出：${(item.outputs || []).join(", ")}`)).join("") || sectionCard("状态", payload.message || "暂无能力")}
+    <div class="grid stats" style="margin-top:16px;">
+      ${card("能力数", items.length)}
+      ${card("调用量", stats.call_count || 0)}
+      ${card("拒绝量", stats.rejected_count || 0)}
+      ${card("错误种类", Object.keys(stats.error_codes || {}).length)}
     </div>
+    <div style="margin-top:16px;">${table(["能力编码", "名称", "状态", "输入", "输出"], rows)}</div>
+    <div style="margin-top:16px;">${table(["错误码", "次数"], errorRows)}</div>
   `;
 }
 
 async function renderRuntime() {
   const payload = await getJson("/ops/l4/runtime");
+  const rows = (payload.routes || []).map((item) =>
+    `<tr><td>${item.task_type}</td><td>${item.model_route}</td></tr>`
+  );
   return `
     <div class="toolbar"><h2>运行时治理</h2><button id="refresh-runtime">刷新</button></div>
-    <div class="grid cards" style="margin-top:16px;">
-      ${sectionCard("运行状态", `${payload.service || "不可用"} · 执行中 ${payload.inflight ?? "-"} · 队列 ${payload.queue_depth ?? "-"}`)}
-      ${sectionCard("重试策略", `最大尝试 ${payload.retry_policy?.max_attempts ?? "-"}<br/>超时毫秒 ${payload.retry_policy?.timeout_ms ?? "-"}`)}
-      ${sectionCard("路由策略", (payload.routes || []).map((item) => `${item.task_type} -> ${item.model_route}`).join("<br/>") || payload.message || "暂无路由")}
+    <div class="grid stats" style="margin-top:16px;">
+      ${card("执行中", payload.inflight ?? "-")}
+      ${card("队列深度", payload.queue_depth ?? "-")}
+      ${card("并发上限", payload.max_concurrency ?? "-")}
+      ${card("熔断器", (payload.circuit_breakers || []).length)}
     </div>
+    <div style="margin-top:16px;">${table(["任务类型", "模型路由"], rows)}</div>
   `;
 }
 
 async function renderKnowledge() {
   const payload = await getJson("/ops/l5/knowledge");
+  const rows = (payload.knowledge_bases || []).map((item) =>
+    `<tr><td>${item.name}</td><td>${item.status}</td><td>${item.documents}</td></tr>`
+  );
+  const pipelineRows = (payload.pipelines || []).map((item) =>
+    `<tr><td>${item.name}</td><td>${item.status}</td></tr>`
+  );
   return `
     <div class="toolbar"><h2>知识运营</h2><button id="refresh-knowledge">刷新</button></div>
-    <div class="grid cards" style="margin-top:16px;">
-      ${((payload.knowledge_bases || []).map((item) => sectionCard(item.name, `${item.status} · 文档数 ${item.documents}`)).join("")) || sectionCard("状态", payload.message || "暂无数据")}
-      ${sectionCard("流水线", (payload.pipelines || []).map((item) => `${item.name} · ${item.status}`).join("<br/>") || "暂无流水线")}
-      ${sectionCard("质量", `可信资产 ${payload.quality?.trusted_assets ?? 0}<br/>问题数 ${payload.quality?.issues ?? 0}`)}
+    <div class="grid stats" style="margin-top:16px;">
+      ${card("知识库", (payload.knowledge_bases || []).length)}
+      ${card("流水线", (payload.pipelines || []).length)}
+      ${card("可信资产", payload.quality?.trusted_assets ?? 0)}
+      ${card("问题数", payload.quality?.issues ?? 0)}
     </div>
+    <div style="margin-top:16px;">${table(["知识库", "状态", "文档数"], rows)}</div>
+    <div style="margin-top:16px;">${table(["流水线", "状态"], pipelineRows)}</div>
   `;
 }
 
 async function renderModels() {
   const payload = await getJson("/ops/l6/models");
+  const rows = (payload.models || []).map((item) =>
+    `<tr><td>${item.name}</td><td>${item.type}</td><td>${item.status}</td></tr>`
+  );
+  const evalRows = (payload.evaluations || []).map((item) =>
+    `<tr><td>${item.benchmark}</td><td>${item.winner}</td></tr>`
+  );
   return `
     <div class="toolbar"><h2>模型中心</h2><button id="refresh-models">刷新</button></div>
-    <div class="grid cards" style="margin-top:16px;">
-      ${((payload.models || []).map((item) => sectionCard(item.name, `${item.type} · ${item.status}`)).join("")) || sectionCard("状态", payload.message || "暂无模型")}
-      ${sectionCard("评测结果", (payload.evaluations || []).map((item) => `${item.benchmark} -> ${item.winner}`).join("<br/>") || "暂无评测")}
-      ${sectionCard("成本基线", `日预算 ${payload.cost_baseline?.daily_budget ?? 0} ${payload.cost_baseline?.currency ?? ""}`)}
+    <div class="grid stats" style="margin-top:16px;">
+      ${card("模型数", (payload.models || []).length)}
+      ${card("评测项", (payload.evaluations || []).length)}
+      ${card("日预算", payload.cost_baseline?.daily_budget ?? 0)}
+      ${card("币种", payload.cost_baseline?.currency ?? "-")}
     </div>
+    <div style="margin-top:16px;">${table(["模型", "类型", "状态"], rows)}</div>
+    <div style="margin-top:16px;">${table(["基准", "胜出模型"], evalRows)}</div>
   `;
 }
 
 async function renderPlatform() {
   const payload = await getJson("/ops/l7/platform");
+  const rows = [
+    `<tr><td>healthcheck</td><td>${payload.healthcheck}</td></tr>`,
+    `<tr><td>build_ready</td><td>${payload.build_ready}</td></tr>`,
+    `<tr><td>test_ready</td><td>${payload.test_ready}</td></tr>`,
+    `<tr><td>run_ready</td><td>${payload.run_ready}</td></tr>`,
+  ];
   return `
     <div class="toolbar"><h2>平台底座</h2><button id="refresh-platform">刷新</button></div>
-    <div class="grid cards" style="margin-top:16px;">
-      ${sectionCard("健康检查", `healthcheck ${payload.healthcheck}<br/>build_ready ${payload.build_ready}<br/>test_ready ${payload.test_ready}<br/>run_ready ${payload.run_ready}`)}
-      ${sectionCard("服务状态", `${payload.service || "agent-platform-foundation"} · ${payload.status || "unknown"}`)}
+    <div class="grid stats" style="margin-top:16px;">
+      ${card("服务状态", payload.status || "-")}
+      ${card("健康检查", payload.healthcheck ? "正常" : "异常")}
+      ${card("构建脚本", payload.build_ready ? "就绪" : "缺失")}
+      ${card("运行脚本", payload.run_ready ? "就绪" : "缺失")}
     </div>
+    <div style="margin-top:16px;">${table(["项目项", "状态"], rows)}</div>
   `;
 }
 
 async function renderRoute(route) {
   if (route.path === "/console/dashboard") return renderDashboard();
+  if (route.path === "/console/gateway") return renderGateway();
   if (route.path === "/console/debug") return renderDebug();
   if (route.path === "/console/scenarios") return renderScenarios();
   if (route.path === "/console/capabilities") return renderCapabilities();
@@ -210,6 +296,7 @@ function bindInteractions() {
   if (replay) replay.addEventListener("click", replayTrace);
   const refreshers = {
     "refresh-dashboard": "/console/dashboard",
+    "refresh-gateway": "/console/gateway",
     "refresh-scenarios": "/console/scenarios",
     "refresh-capabilities": "/console/capabilities",
     "refresh-runtime": "/console/runtime",
