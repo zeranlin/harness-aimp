@@ -13,9 +13,12 @@ API:
 - `GET /scenarios`
 - `GET /scenarios/intelligent_qa`
 - `GET /executions/{request_id}`
+- `GET /ops/overview`
 - `POST /invoke`
 
 MVP:
 - 已注册场景：`intelligent_qa`
 - 已接通下游：`atomic-ai-service`、`agent-model-runtime`
 - 已具备执行记录：`data/executions.log`
+- 已具备下游超时与重试策略：2 秒超时，最多 2 次尝试
+- 已具备统一错误码：`INVALID_INPUT`、`UPSTREAM_L3_UNAVAILABLE`、`UPSTREAM_L4_UNAVAILABLE`
