@@ -319,7 +319,7 @@ public class Main {
         Map<String, RouteConfig> routes = new LinkedHashMap<String, RouteConfig>();
         routes.put("qa", new RouteConfig("qa", "agent-business-solution", "http://127.0.0.1:8002/invoke", "http://127.0.0.1:8002/health"));
         routes.put("compliance", new RouteConfig("compliance", "atomic-ai-engine", "http://127.0.0.1:8003/invoke", "http://127.0.0.1:8003/health"));
-        routes.put("pricing", new RouteConfig("pricing", "agent-model-runtime", "http://127.0.0.1:8081/invoke", "http://127.0.0.1:8081/health"));
+        routes.put("pricing", new RouteConfig("pricing", "agent-model-runtime", "http://127.0.0.1:8081/runtime/invoke", "http://127.0.0.1:8081/health"));
         return routes;
     }
 

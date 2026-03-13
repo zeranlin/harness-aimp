@@ -64,7 +64,7 @@ Compliance contract mapping:
 - `service=compliance` 会映射为 `capability_code=structured_extraction`
 
 Pricing contract mapping:
-- 当 `service=pricing` 时，L1 会把网关请求转换为 L4 `agent-model-runtime` 的标准运行契约。
+- 当 `service=pricing` 时，L1 会把网关请求转换为 L4 `agent-model-runtime` 的标准 runtime 契约，并转发到 `POST /runtime/invoke`。
 - `payload` 或 `prompt` 会映射为 `input.payload`
 - `service=pricing` 会映射为 `task_type=pricing_inference`
 
