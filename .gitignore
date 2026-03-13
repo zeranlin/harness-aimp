@@ -2,3 +2,4 @@ build/
 __pycache__/
 *.pyc
 agent-gateway-basic/data/*.log
+agent-gateway-basic/data/metrics.log

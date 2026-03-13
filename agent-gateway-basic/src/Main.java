@@ -61,6 +61,12 @@ public class Main {
                 return GatewayResponse.ok(app.metricsJson());
             }
         }));
+        server.createContext("/ops/metrics/history", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) {
+                return GatewayResponse.ok(app.metricsHistoryJson());
+            }
+        }));
         server.createContext("/ops/audits", new JsonHandler(new ExchangeProcessor() {
             @Override
             public GatewayResponse handle(HttpExchange exchange) {
@@ -161,8 +167,15 @@ public class Main {
         String overview = app.overviewJson();
         assertContains(overview, "\"metrics\":", "overview endpoint should embed metrics");
         assertContains(overview, "\"upstreams\":", "overview endpoint should embed upstreams");
-        String reload = app.reloadWithConfig(new GatewayDiskConfig(defaultRoutes(), defaultProfiles(), new File(projectRoot(), "data/audits.log")));
+        String reload = app.reloadWithConfig(new GatewayDiskConfig(
+                defaultRoutes(),
+                defaultProfiles(),
+                new File(projectRoot(), "data/audits.log"),
+                new File(projectRoot(), "data/metrics.log")
+        ));
         assertContains(reload, "\"status\":\"ok\"", "reload should succeed");
+        String metricsHistory = app.metricsHistoryJson();
+        assertContains(metricsHistory, "\"items\":", "metrics history should be exposed");
     }
 
     private static UpstreamInvoker fakeInvoker() {
@@ -220,32 +233,34 @@ public class Main {
         private final Deque<AuditEvent> auditEvents = new ArrayDeque<AuditEvent>();
         private final File projectRoot;
         private final File auditLogFile;
+        private final File metricsLogFile;
         private final UpstreamInvoker upstreamInvoker;
 
-        private GatewayApp(File projectRoot, GatewayConfigSnapshot configSnapshot, File auditLogFile, UpstreamInvoker upstreamInvoker) {
+        private GatewayApp(File projectRoot, GatewayConfigSnapshot configSnapshot, File auditLogFile, File metricsLogFile, UpstreamInvoker upstreamInvoker) {
             this.projectRoot = projectRoot;
             this.configSnapshot = configSnapshot;
             this.auditLogFile = auditLogFile;
+            this.metricsLogFile = metricsLogFile;
             this.upstreamInvoker = upstreamInvoker;
         }
 
         static GatewayApp fromDisk(UpstreamInvoker upstreamInvoker) throws IOException {
             File root = projectRoot();
             GatewayDiskConfig config = GatewayDiskConfig.load(root);
-            return fromConfig(root, config.routesByService, config.clientProfiles, config.auditLogFile, upstreamInvoker);
+            return fromConfig(root, config.routesByService, config.clientProfiles, config.auditLogFile, config.metricsLogFile, upstreamInvoker);
         }
 
         static GatewayApp fromConfig(Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, UpstreamInvoker upstreamInvoker) {
             File root = projectRoot();
-            return fromConfig(root, routesByService, profiles, new File(root, "data/audits.log"), upstreamInvoker);
+            return fromConfig(root, routesByService, profiles, new File(root, "data/audits.log"), new File(root, "data/metrics.log"), upstreamInvoker);
         }
 
         static GatewayApp fromConfig(Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, File auditLogFile, UpstreamInvoker upstreamInvoker) {
-            return fromConfig(projectRoot(), routesByService, profiles, auditLogFile, upstreamInvoker);
+            return fromConfig(projectRoot(), routesByService, profiles, auditLogFile, new File(projectRoot(), "data/metrics.log"), upstreamInvoker);
         }
 
-        static GatewayApp fromConfig(File projectRoot, Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, File auditLogFile, UpstreamInvoker upstreamInvoker) {
-            return new GatewayApp(projectRoot, GatewayConfigSnapshot.from(routesByService, profiles), auditLogFile, upstreamInvoker);
+        static GatewayApp fromConfig(File projectRoot, Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, File auditLogFile, File metricsLogFile, UpstreamInvoker upstreamInvoker) {
+            return new GatewayApp(projectRoot, GatewayConfigSnapshot.from(routesByService, profiles), auditLogFile, metricsLogFile, upstreamInvoker);
         }
 
         GatewayResponse invoke(GatewayRequest request) {
@@ -359,6 +374,14 @@ public class Main {
             return jsonObject(mapOf("services", "[" + String.join(",", services) + "]"));
         }
 
+        String metricsHistoryJson() {
+            List<String> items = readRecentMetricEntries();
+            return jsonObject(mapOf(
+                    "summary", metricsSummaryJson(items),
+                    "items", "[" + String.join(",", items) + "]"
+            ));
+        }
+
         String auditJson() {
             return jsonObject(mapOf("items", "[" + String.join(",", readRecentAuditEntries()) + "]"));
         }
@@ -414,6 +437,7 @@ public class Main {
             return jsonObject(mapOf(
                     "generated_at", Instant.now().toString(),
                     "metrics", metricsJson(),
+                    "metrics_history", metricsHistoryJson(),
                     "upstreams", upstreamsJson(),
                     "config", configJson(),
                     "audit_summary", auditSummaryJson(recentAuditEntries),
@@ -438,7 +462,9 @@ public class Main {
         private void incrementMetric(String service, boolean authorized, Instant startedAt) {
             ServiceMetrics metrics = metricsByService.containsKey(service) ? metricsByService.get(service) : new ServiceMetrics();
             metricsByService.put(service, metrics);
-            metrics.record(authorized, Duration.between(startedAt, Instant.now()).toMillis());
+            long durationMs = Duration.between(startedAt, Instant.now()).toMillis();
+            metrics.record(authorized, durationMs);
+            appendMetric(new MetricEvent(Instant.now(), service, authorized, durationMs));
         }
 
         private void recordAudit(String client, String service, String decision, String reason, Instant timestamp, int statusCode) {
@@ -504,6 +530,57 @@ public class Main {
             return new ArrayList<String>(lines);
         }
 
+        private void appendMetric(MetricEvent event) {
+            File parent = metricsLogFile.getParentFile();
+            if (parent != null && !parent.exists()) {
+                parent.mkdirs();
+            }
+            FileWriter writer = null;
+            try {
+                writer = new FileWriter(metricsLogFile, true);
+                writer.write(event.toJson());
+                writer.write("\n");
+            } catch (IOException ignored) {
+            } finally {
+                if (writer != null) {
+                    try {
+                        writer.close();
+                    } catch (IOException ignored) {
+                    }
+                }
+            }
+        }
+
+        private List<String> readRecentMetricEntries() {
+            if (!metricsLogFile.exists()) {
+                return new ArrayList<String>();
+            }
+            Deque<String> lines = new ArrayDeque<String>();
+            BufferedReader reader = null;
+            try {
+                reader = new BufferedReader(new FileReader(metricsLogFile));
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (!line.trim().isEmpty()) {
+                        lines.addFirst(line);
+                        while (lines.size() > 100) {
+                            lines.removeLast();
+                        }
+                    }
+                }
+            } catch (IOException ignored) {
+                return new ArrayList<String>();
+            } finally {
+                if (reader != null) {
+                    try {
+                        reader.close();
+                    } catch (IOException ignored) {
+                    }
+                }
+            }
+            return new ArrayList<String>(lines);
+        }
+
         private String auditSummaryJson(List<String> auditEntries) {
             int allowCount = 0;
             int denyCount = 0;
@@ -520,23 +597,42 @@ public class Main {
                     "deny", denyCount
             ));
         }
+
+        private String metricsSummaryJson(List<String> metricEntries) {
+            int successCount = 0;
+            int failureCount = 0;
+            for (String entry : metricEntries) {
+                if (entry.indexOf("\"authorized\":true") >= 0) {
+                    successCount += 1;
+                } else if (entry.indexOf("\"authorized\":false") >= 0) {
+                    failureCount += 1;
+                }
+            }
+            return jsonObject(mapOf(
+                    "total", metricEntries.size(),
+                    "authorized", successCount,
+                    "rejected", failureCount
+            ));
+        }
     }
 
     private static final class GatewayDiskConfig {
         private final Map<String, RouteConfig> routesByService;
         private final List<ClientProfile> clientProfiles;
         private final File auditLogFile;
+        private final File metricsLogFile;
 
-        private GatewayDiskConfig(Map<String, RouteConfig> routesByService, List<ClientProfile> clientProfiles, File auditLogFile) {
+        private GatewayDiskConfig(Map<String, RouteConfig> routesByService, List<ClientProfile> clientProfiles, File auditLogFile, File metricsLogFile) {
             this.routesByService = routesByService;
             this.clientProfiles = clientProfiles;
             this.auditLogFile = auditLogFile;
+            this.metricsLogFile = metricsLogFile;
         }
 
         static GatewayDiskConfig load(File projectRoot) throws IOException {
             Properties routeProps = loadProperties(new File(projectRoot, "config/routes.properties"));
             Properties clientProps = loadProperties(new File(projectRoot, "config/clients.properties"));
-            return new GatewayDiskConfig(parseRoutes(routeProps), parseClients(clientProps), new File(projectRoot, "data/audits.log"));
+            return new GatewayDiskConfig(parseRoutes(routeProps), parseClients(clientProps), new File(projectRoot, "data/audits.log"), new File(projectRoot, "data/metrics.log"));
         }
 
         private static Properties loadProperties(File file) throws IOException {
@@ -917,6 +1013,29 @@ public class Main {
                     "decision", decision,
                     "reason", reason,
                     "status_code", statusCode
+            ));
+        }
+    }
+
+    private static final class MetricEvent {
+        private final Instant timestamp;
+        private final String service;
+        private final boolean authorized;
+        private final long durationMs;
+
+        private MetricEvent(Instant timestamp, String service, boolean authorized, long durationMs) {
+            this.timestamp = timestamp;
+            this.service = service;
+            this.authorized = authorized;
+            this.durationMs = durationMs;
+        }
+
+        private String toJson() {
+            return jsonObject(mapOf(
+                    "timestamp", timestamp.toString(),
+                    "service", service,
+                    "authorized", authorized,
+                    "duration_ms", durationMs
             ));
         }
     }

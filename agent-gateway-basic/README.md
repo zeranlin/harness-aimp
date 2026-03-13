@@ -12,6 +12,7 @@ Config:
 - `config/routes.properties`
 - `config/clients.properties`
 - `data/audits.log` 运行时生成
+- `data/metrics.log` 运行时生成
 
 Client quota config:
 - `client.<name>.requests_per_minute=<default_quota>`
@@ -24,6 +25,7 @@ API:
 - `GET /health`
 - `GET|POST /gateway/v1/invoke?service=<qa|compliance|pricing>`
 - `GET /ops/metrics/overview`
+- `GET /ops/metrics/history`
 - `GET /ops/audits`
 - `GET /ops/config`
 - `GET /ops/upstreams`
@@ -48,3 +50,4 @@ Capabilities:
 - Upstream 健康探测与短时熔断
 - 统一运营总览接口
 - 配置热重载
+- 指标持久化与历史查询
