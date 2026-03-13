@@ -10,7 +10,8 @@ from uuid import uuid4
 
 PORT = 8002
 ROOT = Path(__file__).resolve().parent
-SCENARIO_FILE = ROOT / "scenarios" / "intelligent_qa" / "manifest.json"
+CONFIG_FILE = ROOT / "config" / "scenarios.json"
+SCENARIOS_DIR = ROOT / "scenarios"
 EXECUTION_LOG = ROOT / "data" / "executions.log"
 UPSTREAM_TIMEOUT_SECONDS = 2
 UPSTREAM_MAX_ATTEMPTS = 2
@@ -53,7 +54,7 @@ def post_json(url, payload, timeout=5):
         except json.JSONDecodeError:
             payload = {"status": "error", "message": text}
         return exc.code, payload
-    except Exception as exc:  # pragma: no cover - surfaced via API contract
+    except Exception as exc:
         return 502, {"status": "error", "message": str(exc)}
 
 
@@ -120,9 +121,27 @@ def summarize_executions(items):
     return summary
 
 
+def record_execution(request_id, scenario_code, status, duration_ms, dependency_calls=None, errors=None):
+    append_jsonl(
+        EXECUTION_LOG,
+        {
+            "request_id": request_id,
+            "scenario_code": scenario_code,
+            "status": status,
+            "duration_ms": duration_ms,
+            "dependency_calls": dependency_calls or [],
+            "errors": errors or [],
+        },
+    )
+
+
 class ScenarioRegistry:
-    def __init__(self):
-        self.scenarios = {"intelligent_qa": load_json(SCENARIO_FILE)}
+    def __init__(self, config_file=CONFIG_FILE, scenarios_dir=SCENARIOS_DIR):
+        config = load_json(config_file)
+        self.scenarios = {}
+        for scenario_code in config.get("scenarios", []):
+            manifest_path = scenarios_dir / scenario_code / "manifest.json"
+            self.scenarios[scenario_code] = load_json(manifest_path)
 
     def list(self):
         return list(self.scenarios.values())
@@ -131,30 +150,58 @@ class ScenarioRegistry:
         return self.scenarios.get(scenario_code)
 
 
-class IntelligentQaService:
+class ScenarioService:
+    scenario_code = ""
+    required_field = ""
+    l3_capability_code = "structured_extraction"
+    l4_task_type = ""
+    request_field = ""
+
     def __init__(self, manifest):
         self.manifest = manifest
+
+    def extract_input(self, request_payload):
+        return ""
+
+    def build_success_result(self, source_text, capability_call, model_call):
+        raise NotImplementedError
+
+    def error_response(self, request_id, code, message, started_at, dependency_calls=None):
+        duration_ms = int((time.time() - started_at) * 1000)
+        errors = [{"code": code, "message": message}]
+        record_execution(request_id, self.scenario_code, "error", duration_ms, dependency_calls, errors)
+        return {
+            "request_id": request_id,
+            "scenario_code": self.scenario_code,
+            "status": "error",
+            "result": {},
+            "evidence": [],
+            "metrics": {"duration_ms": duration_ms},
+            "errors": errors,
+        }
 
     def execute(self, request_payload):
         started_at = time.time()
         request_id = request_payload.get("request_id") or f"req-{uuid4().hex[:12]}"
-        question = (
-            request_payload.get("input", {}).get("question")
-            or request_payload.get("prompt")
-            or ""
-        )
-        if not question:
+        source_text = self.extract_input(request_payload)
+        if not source_text:
             return 400, self.error_response(
                 request_id,
                 "INVALID_INPUT",
-                "input.question is required",
+                f"{self.required_field} is required",
                 started_at,
             )
 
         capability_call = call_dependency(
             "atomic-ai-service",
             "http://127.0.0.1:8003/invoke",
-            {"document": question, "request_id": request_id, "capability": "intent-retrieval"},
+            {
+                "request_id": request_id,
+                "tenant_id": request_payload.get("tenant_id", ""),
+                "operator_id": request_payload.get("operator_id", ""),
+                "capability_code": self.l3_capability_code,
+                "input": {"document": source_text},
+            },
             "UPSTREAM_L3_UNAVAILABLE",
         )
         if not capability_call["ok"]:
@@ -163,13 +210,11 @@ class IntelligentQaService:
                 capability_call["error_code"] or "UPSTREAM_L3_ERROR",
                 capability_call["payload"].get("message", "atomic-ai-service failed"),
                 started_at,
-                [
-                    {
-                        "service": capability_call["service"],
-                        "status_code": capability_call["status_code"],
-                        "attempts": capability_call["attempts"],
-                    }
-                ],
+                [{
+                    "service": capability_call["service"],
+                    "status_code": capability_call["status_code"],
+                    "attempts": capability_call["attempts"],
+                }],
             )
 
         model_call = call_dependency(
@@ -177,8 +222,9 @@ class IntelligentQaService:
             "http://127.0.0.1:8081/invoke",
             {
                 "request_id": request_id,
-                "scenario_code": "intelligent_qa",
-                "question": question,
+                "scenario_code": self.scenario_code,
+                "task_type": self.l4_task_type,
+                self.request_field: source_text,
                 "evidence_count": capability_call["payload"].get("evidence_count", 0),
             },
             "UPSTREAM_L4_UNAVAILABLE",
@@ -206,17 +252,9 @@ class IntelligentQaService:
         duration_ms = int((time.time() - started_at) * 1000)
         response = {
             "request_id": request_id,
-            "scenario_code": "intelligent_qa",
+            "scenario_code": self.scenario_code,
             "status": "success",
-            "result": {
-                "answer": (
-                    "已完成智能问答编排，先由原子能力完成证据预处理，"
-                    "再由模型运行时生成结构化回答。"
-                ),
-                "summary": f"问题长度 {len(question)}，证据数 {capability_call['payload'].get('evidence_count', 0)}。",
-                "risk_level": capability_call["payload"].get("risk_level", "unknown"),
-                "model_route": model_call["payload"].get("model_route", "unknown"),
-            },
+            "result": self.build_success_result(source_text, capability_call, model_call),
             "evidence": [
                 {
                     "type": "capability_output",
@@ -227,12 +265,12 @@ class IntelligentQaService:
             "metrics": {"duration_ms": duration_ms},
             "errors": [],
         }
-        execution = {
-            "request_id": request_id,
-            "scenario_code": "intelligent_qa",
-            "status": "success",
-            "duration_ms": duration_ms,
-            "dependency_calls": [
+        record_execution(
+            request_id,
+            self.scenario_code,
+            "success",
+            duration_ms,
+            [
                 {
                     "service": capability_call["service"],
                     "status_code": capability_call["status_code"],
@@ -244,37 +282,75 @@ class IntelligentQaService:
                     "attempts": model_call["attempts"],
                 },
             ],
-            "errors": [],
-        }
-        append_jsonl(EXECUTION_LOG, execution)
+            [],
+        )
         return 200, response
 
-    def error_response(self, request_id, code, message, started_at, dependency_calls=None):
-        duration_ms = int((time.time() - started_at) * 1000)
-        dependency_calls = dependency_calls or []
-        execution = {
-            "request_id": request_id,
-            "scenario_code": "intelligent_qa",
-            "status": "error",
-            "duration_ms": duration_ms,
-            "dependency_calls": dependency_calls,
-            "errors": [{"code": code, "message": message}],
-        }
-        append_jsonl(EXECUTION_LOG, execution)
+
+class IntelligentQaService(ScenarioService):
+    scenario_code = "intelligent_qa"
+    required_field = "input.question"
+    l3_capability_code = "intent_retrieval"
+    l4_task_type = "qa_generation"
+    request_field = "question"
+
+    def extract_input(self, request_payload):
+        return request_payload.get("input", {}).get("question") or request_payload.get("prompt") or ""
+
+    def build_success_result(self, source_text, capability_call, model_call):
         return {
-            "request_id": request_id,
-            "scenario_code": "intelligent_qa",
-            "status": "error",
-            "result": {},
-            "evidence": [],
-            "metrics": {"duration_ms": duration_ms},
-            "errors": [{"code": code, "message": message}],
+            "answer": "已完成智能问答编排，先由原子能力完成证据预处理，再由模型运行时生成结构化回答。",
+            "summary": f"问题长度 {len(source_text)}，证据数 {capability_call['payload'].get('evidence_count', 0)}。",
+            "risk_level": capability_call["payload"].get("risk_level", "unknown"),
+            "model_route": model_call["payload"].get("model_route", "unknown"),
         }
+
+
+class ContractReviewService(ScenarioService):
+    scenario_code = "contract_review"
+    required_field = "input.contract_text"
+    l3_capability_code = "structured_extraction"
+    l4_task_type = "contract_review"
+    request_field = "payload"
+
+    def extract_input(self, request_payload):
+        return request_payload.get("input", {}).get("contract_text") or request_payload.get("document") or request_payload.get("prompt") or ""
+
+    def build_success_result(self, source_text, capability_call, model_call):
+        evidence_count = capability_call["payload"].get("evidence_count", 0)
+        risk_level = capability_call["payload"].get("risk_level", "unknown")
+        return {
+            "review_summary": "已完成合同审查编排，已对合同文本完成结构化提取并输出审查摘要。",
+            "review_points": [
+                "已完成基础条款提取",
+                f"识别到 {evidence_count} 条候选证据",
+                f"风险等级为 {risk_level}",
+            ],
+            "risk_level": risk_level,
+            "model_route": model_call["payload"].get("model_route", "unknown"),
+            "document_length": len(source_text),
+        }
+
+
+class ScenarioRuntime:
+    def __init__(self, registry):
+        self.registry = registry
+        self.services = {
+            "intelligent_qa": IntelligentQaService(registry.get("intelligent_qa")),
+            "contract_review": ContractReviewService(registry.get("contract_review")),
+        }
+
+    def execute(self, payload):
+        scenario_code = payload.get("scenario_code") or "intelligent_qa"
+        service = self.services.get(scenario_code)
+        if not service:
+            return 404, {"status": "error", "message": "scenario not found"}
+        return service.execute(payload)
 
 
 class Handler(BaseHTTPRequestHandler):
     registry = ScenarioRegistry()
-    service = IntelligentQaService(registry.get("intelligent_qa"))
+    runtime = ScenarioRuntime(registry)
 
     def _json(self, status_code, payload):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -321,6 +397,7 @@ class Handler(BaseHTTPRequestHandler):
                     "status": "UP",
                     "service": "agent-business-solution",
                     "summary": summarize_executions(executions),
+                    "registered_scenarios": [item["scenario_code"] for item in self.registry.list()],
                     "recent_executions": executions[-20:],
                     "retry_policy": {
                         "upstream_timeout_seconds": UPSTREAM_TIMEOUT_SECONDS,
@@ -338,36 +415,37 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
         payload = json.loads(raw or "{}")
-        scenario_code = payload.get("scenario_code") or "intelligent_qa"
-        if scenario_code != "intelligent_qa":
-            self._json(404, {"status": "error", "message": "scenario not found"})
-            return
-        status_code, response = self.service.execute(payload)
+        status_code, response = self.runtime.execute(payload)
         self._json(status_code, response)
 
 
 def self_test():
     registry = ScenarioRegistry()
-    scenario = registry.get("intelligent_qa")
-    assert scenario["scenario_code"] == "intelligent_qa"
-    assert scenario["status"] == "active"
-    response = IntelligentQaService(scenario).error_response(
+    assert registry.get("intelligent_qa")["scenario_code"] == "intelligent_qa"
+    assert registry.get("contract_review")["scenario_code"] == "contract_review"
+    runtime = ScenarioRuntime(registry)
+    status_code, response = runtime.execute({"scenario_code": "missing"})
+    assert status_code == 404
+    assert response["message"] == "scenario not found"
+    error_response = IntelligentQaService(registry.get("intelligent_qa")).error_response(
         "req-selftest", "INVALID_INPUT", "input.question is required", time.time()
     )
-    assert response["status"] == "error"
-    assert response["errors"][0]["code"] == "INVALID_INPUT"
+    assert error_response["status"] == "error"
+    assert error_response["errors"][0]["code"] == "INVALID_INPUT"
     summary = summarize_executions(
         [
             {"scenario_code": "intelligent_qa", "status": "success", "duration_ms": 10, "errors": []},
+            {"scenario_code": "contract_review", "status": "success", "duration_ms": 20, "errors": []},
             {
-                "scenario_code": "intelligent_qa",
+                "scenario_code": "contract_review",
                 "status": "error",
                 "duration_ms": 30,
                 "errors": [{"code": "UPSTREAM_L3_UNAVAILABLE", "message": "timeout"}],
             },
         ]
     )
-    assert summary["total"] == 2
+    assert summary["total"] == 3
+    assert summary["scenarios"]["contract_review"]["total"] == 2
     assert summary["error_codes"]["UPSTREAM_L3_UNAVAILABLE"] == 1
     print("self-test ok")
 

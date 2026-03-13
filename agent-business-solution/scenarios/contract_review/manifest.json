@@ -1,0 +1,29 @@
+{
+  "scenario_code": "contract_review",
+  "name": "Contract Review",
+  "version": "0.1.0",
+  "status": "active",
+  "orchestrator_type": "programmatic",
+  "entrypoint": "scenarios.contract_review.service",
+  "dependencies": [
+    "atomic-ai-service",
+    "agent-model-runtime"
+  ],
+  "input_schema": {
+    "required": [
+      "input.contract_text"
+    ]
+  },
+  "output_schema": {
+    "result": [
+      "review_summary",
+      "review_points",
+      "risk_level",
+      "model_route",
+      "document_length"
+    ],
+    "metrics": [
+      "duration_ms"
+    ]
+  }
+}

@@ -12,12 +12,14 @@ API:
 - `GET /health`
 - `GET /scenarios`
 - `GET /scenarios/intelligent_qa`
+- `GET /scenarios/contract_review`
 - `GET /executions/{request_id}`
 - `GET /ops/overview`
 - `POST /invoke`
 
-MVP:
-- 已注册场景：`intelligent_qa`
+Current scope:
+- 已注册场景：`intelligent_qa`、`contract_review`
+- 已具备多场景注册与分发骨架
 - 已接通下游：`atomic-ai-service`、`agent-model-runtime`
 - 已具备执行记录：`data/executions.log`
 - 已具备下游超时与重试策略：2 秒超时，最多 2 次尝试

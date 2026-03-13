@@ -1,5 +1,6 @@
 {
   "scenarios": [
-    "intelligent_qa"
+    "intelligent_qa",
+    "contract_review"
   ]
 }
