@@ -6,9 +6,12 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.BufferedReader;
+import java.io.FileReader;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -110,6 +113,8 @@ public class Main {
         String config = app.configJson();
         assertContains(config, "\"service\":\"qa\"", "config endpoint should expose routes");
         assertContains(config, "\"client\":\"ops\"", "config endpoint should expose clients");
+        String audits = app.auditJson();
+        assertContains(audits, "\"decision\":\"ALLOW\"", "audit endpoint should expose persisted entries");
     }
 
     private static UpstreamInvoker fakeInvoker() {
@@ -160,25 +165,31 @@ public class Main {
         private final Map<String, RateWindow> windowsByClient = new ConcurrentHashMap<String, RateWindow>();
         private final Map<String, ServiceMetrics> metricsByService = new ConcurrentHashMap<String, ServiceMetrics>();
         private final Deque<AuditEvent> auditEvents = new ArrayDeque<AuditEvent>();
+        private final File auditLogFile;
         private final UpstreamInvoker upstreamInvoker;
 
-        private GatewayApp(Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, UpstreamInvoker upstreamInvoker) {
+        private GatewayApp(Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, File auditLogFile, UpstreamInvoker upstreamInvoker) {
             Map<String, ClientProfile> profilesMap = new LinkedHashMap<String, ClientProfile>();
             for (ClientProfile profile : profiles) {
                 profilesMap.put(profile.apiKey, profile);
             }
             this.profilesByApiKey = profilesMap;
             this.routesByService = routesByService;
+            this.auditLogFile = auditLogFile;
             this.upstreamInvoker = upstreamInvoker;
         }
 
         static GatewayApp fromDisk(UpstreamInvoker upstreamInvoker) throws IOException {
             GatewayDiskConfig config = GatewayDiskConfig.load(projectRoot());
-            return fromConfig(config.routesByService, config.clientProfiles, upstreamInvoker);
+            return fromConfig(config.routesByService, config.clientProfiles, config.auditLogFile, upstreamInvoker);
         }
 
         static GatewayApp fromConfig(Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, UpstreamInvoker upstreamInvoker) {
-            return new GatewayApp(routesByService, profiles, upstreamInvoker);
+            return fromConfig(routesByService, profiles, new File(projectRoot(), "data/audits.log"), upstreamInvoker);
+        }
+
+        static GatewayApp fromConfig(Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, File auditLogFile, UpstreamInvoker upstreamInvoker) {
+            return new GatewayApp(routesByService, profiles, auditLogFile, upstreamInvoker);
         }
 
         GatewayResponse invoke(GatewayRequest request) {
@@ -271,20 +282,7 @@ public class Main {
         }
 
         String auditJson() {
-            List<String> items = new ArrayList<String>();
-            synchronized (auditEvents) {
-                for (AuditEvent event : auditEvents) {
-                    items.add(jsonObject(mapOf(
-                            "timestamp", event.timestamp.toString(),
-                            "client", event.client,
-                            "service", event.service,
-                            "decision", event.decision,
-                            "reason", event.reason,
-                            "status_code", event.statusCode
-                    )));
-                }
-            }
-            return jsonObject(mapOf("items", "[" + String.join(",", items) + "]"));
+            return jsonObject(mapOf("items", "[" + String.join(",", readRecentAuditEntries()) + "]"));
         }
 
         String configJson() {
@@ -318,28 +316,84 @@ public class Main {
         }
 
         private void recordAudit(String client, String service, String decision, String reason, Instant timestamp, int statusCode) {
+            AuditEvent event = new AuditEvent(timestamp, client, service, decision, reason, statusCode);
             synchronized (auditEvents) {
-                auditEvents.addFirst(new AuditEvent(timestamp, client, service, decision, reason, statusCode));
+                auditEvents.addFirst(event);
                 while (auditEvents.size() > 100) {
                     auditEvents.removeLast();
                 }
             }
+            appendAudit(event);
+        }
+
+        private void appendAudit(AuditEvent event) {
+            File parent = auditLogFile.getParentFile();
+            if (parent != null && !parent.exists()) {
+                parent.mkdirs();
+            }
+            FileWriter writer = null;
+            try {
+                writer = new FileWriter(auditLogFile, true);
+                writer.write(event.toJson());
+                writer.write("\n");
+            } catch (IOException ignored) {
+                // Keep request path available even if audit persistence fails.
+            } finally {
+                if (writer != null) {
+                    try {
+                        writer.close();
+                    } catch (IOException ignored) {
+                    }
+                }
+            }
+        }
+
+        private List<String> readRecentAuditEntries() {
+            if (!auditLogFile.exists()) {
+                return new ArrayList<String>();
+            }
+            Deque<String> lines = new ArrayDeque<String>();
+            BufferedReader reader = null;
+            try {
+                reader = new BufferedReader(new FileReader(auditLogFile));
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (!line.trim().isEmpty()) {
+                        lines.addFirst(line);
+                        while (lines.size() > 100) {
+                            lines.removeLast();
+                        }
+                    }
+                }
+            } catch (IOException ignored) {
+                return new ArrayList<String>();
+            } finally {
+                if (reader != null) {
+                    try {
+                        reader.close();
+                    } catch (IOException ignored) {
+                    }
+                }
+            }
+            return new ArrayList<String>(lines);
         }
     }
 
     private static final class GatewayDiskConfig {
         private final Map<String, RouteConfig> routesByService;
         private final List<ClientProfile> clientProfiles;
+        private final File auditLogFile;
 
-        private GatewayDiskConfig(Map<String, RouteConfig> routesByService, List<ClientProfile> clientProfiles) {
+        private GatewayDiskConfig(Map<String, RouteConfig> routesByService, List<ClientProfile> clientProfiles, File auditLogFile) {
             this.routesByService = routesByService;
             this.clientProfiles = clientProfiles;
+            this.auditLogFile = auditLogFile;
         }
 
         static GatewayDiskConfig load(File projectRoot) throws IOException {
             Properties routeProps = loadProperties(new File(projectRoot, "config/routes.properties"));
             Properties clientProps = loadProperties(new File(projectRoot, "config/clients.properties"));
-            return new GatewayDiskConfig(parseRoutes(routeProps), parseClients(clientProps));
+            return new GatewayDiskConfig(parseRoutes(routeProps), parseClients(clientProps), new File(projectRoot, "data/audits.log"));
         }
 
         private static Properties loadProperties(File file) throws IOException {
@@ -610,6 +664,17 @@ public class Main {
             this.decision = decision;
             this.reason = reason;
             this.statusCode = statusCode;
+        }
+
+        private String toJson() {
+            return jsonObject(mapOf(
+                    "timestamp", timestamp.toString(),
+                    "client", client,
+                    "service", service,
+                    "decision", decision,
+                    "reason", reason,
+                    "status_code", statusCode
+            ));
         }
     }
 

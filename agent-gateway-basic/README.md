@@ -11,6 +11,7 @@ Entrypoints:
 Config:
 - `config/routes.properties`
 - `config/clients.properties`
+- `data/audits.log` 运行时生成
 
 API:
 - `GET /health`
@@ -32,3 +33,4 @@ Capabilities:
 - 运营指标汇总
 - HTTP upstream 转发到 L2/L3/L4
 - 路由与客户端策略配置化
+- 审计日志持久化到文件
