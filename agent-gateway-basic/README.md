@@ -45,6 +45,16 @@ QA contract mapping:
 - `service=qa` 会映射为 `scenario_code=intelligent_qa`
 - `x-tenant-id`、`x-operator-id` 会映射为 `tenant_id`、`operator_id`
 
+Compliance contract mapping:
+- 当 `service=compliance` 时，L1 会把网关请求转换为 L3 `atomic-ai-service` 的标准能力契约。
+- `document` 或 `prompt` 会映射为 `input.document`
+- `service=compliance` 会映射为 `capability_code=structured_extraction`
+
+Pricing contract mapping:
+- 当 `service=pricing` 时，L1 会把网关请求转换为 L4 `agent-model-runtime` 的标准运行契约。
+- `payload` 或 `prompt` 会映射为 `input.payload`
+- `service=pricing` 会映射为 `task_type=pricing_inference`
+
 Capabilities:
 - API Key 鉴权
 - 服务路由与策略控制
@@ -60,3 +70,5 @@ Capabilities:
 - 配置热重载
 - 指标持久化与历史查询
 - QA 请求契约已与 L2 `intelligent_qa` 场景对齐
+- Compliance 与 Pricing 请求契约已分别对齐到 L3/L4 标准接口
+- `/ops/overview` 已包含契约转换统计

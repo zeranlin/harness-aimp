@@ -4,6 +4,15 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 PORT = 8003
 
 
+def nested_get(payload, *keys):
+    current = payload
+    for key in keys:
+        if not isinstance(current, dict):
+            return ""
+        current = current.get(key)
+    return current or ""
+
+
 class Handler(BaseHTTPRequestHandler):
     def _json(self, status_code, payload):
         body = json.dumps(payload).encode("utf-8")
@@ -27,15 +36,22 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
         payload = json.loads(raw or "{}")
-        document = payload.get("document", "")
+        request_id = payload.get("request_id", "")
+        capability_code = payload.get("capability_code") or payload.get("capability") or "structured_extraction"
+        document = nested_get(payload, "input", "document") or payload.get("document", "")
+        tenant_id = payload.get("tenant_id", "")
+        operator_id = payload.get("operator_id", "")
 
         self._json(200, {
             "status": "ok",
+            "request_id": request_id,
             "service": "compliance",
             "provider": "atomic-ai-service",
-            "capability": "structured-extraction",
+            "capability_code": capability_code,
             "evidence_count": 2 if document else 0,
             "risk_level": "medium" if document else "low",
+            "tenant_id": tenant_id,
+            "operator_id": operator_id,
         })
 
 

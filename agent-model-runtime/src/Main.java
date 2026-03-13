@@ -9,6 +9,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class Main {
     public static void main(String[] args) throws Exception {
@@ -46,7 +48,14 @@ public class Main {
                 return;
             }
             String body = readBody(exchange.getRequestBody());
+            String requestId = extractJsonString(body, "request_id");
+            String taskType = extractJsonString(body, "task_type");
+            if (taskType.isEmpty()) {
+                taskType = "pricing";
+            }
             String response = "{\"status\":\"ok\",\"service\":\"pricing\",\"provider\":\"agent-model-runtime\","
+                    + "\"request_id\":\"" + escapeJson(requestId) + "\","
+                    + "\"task_type\":\"" + escapeJson(taskType) + "\","
                     + "\"runtime\":\"priority-scheduler\",\"model_route\":\"general-llm-v1\","
                     + "\"payload_size\":" + body.length() + "}";
             writeJson(exchange, 200, response);
@@ -71,5 +80,18 @@ public class Main {
             outputStream.write(buffer, 0, read);
         }
         return new String(outputStream.toByteArray(), StandardCharsets.UTF_8);
+    }
+
+    static String extractJsonString(String body, String key) {
+        Pattern pattern = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*\"([^\"]*)\"");
+        Matcher matcher = pattern.matcher(body == null ? "" : body);
+        return matcher.find() ? matcher.group(1) : "";
+    }
+
+    static String escapeJson(String value) {
+        return (value == null ? "" : value)
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n");
     }
 }

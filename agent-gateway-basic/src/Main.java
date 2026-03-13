@@ -132,6 +132,16 @@ public class Main {
         assertContains(ok.body, "\"provider\":\"agent-business-solution\"", "response should come from upstream");
         assertContains(ok.body, "\"scenario_code\":\"intelligent_qa\"", "qa should be mapped to L2 scenario contract");
         assertContains(ok.body, "\"question\":\"test\"", "qa prompt should be mapped to input.question");
+        GatewayResponse compliance = app.invoke(new GatewayRequest("POST", "/gateway/v1/invoke",
+                stringMapOf("service", "compliance"), stringMapOf("x-api-key", "demo-key-ops"), "{\"document\":\"rule text\"}"));
+        assertEquals(200, compliance.statusCode, "compliance request should pass");
+        assertContains(compliance.body, "\"capability_code\":\"structured_extraction\"", "compliance should be mapped to L3 capability contract");
+        assertContains(compliance.body, "\"document\":\"rule text\"", "compliance should be mapped to input.document");
+        GatewayResponse pricing = app.invoke(new GatewayRequest("POST", "/gateway/v1/invoke",
+                stringMapOf("service", "pricing"), stringMapOf("x-api-key", "demo-key-ops"), "{\"prompt\":\"price summary\"}"));
+        assertEquals(200, pricing.statusCode, "pricing request should pass");
+        assertContains(pricing.body, "\"task_type\":\"pricing_inference\"", "pricing should be mapped to L4 runtime contract");
+        assertContains(pricing.body, "\"payload\":\"price summary\"", "pricing prompt should be mapped to input.payload");
 
         GatewayApp limitApp = GatewayApp.fromConfig(
                 defaultRoutes(),
@@ -172,6 +182,7 @@ public class Main {
         String overview = app.overviewJson();
         assertContains(overview, "\"metrics\":", "overview endpoint should embed metrics");
         assertContains(overview, "\"upstreams\":", "overview endpoint should embed upstreams");
+        assertContains(overview, "\"contract_transformations\":", "overview endpoint should expose contract mapping stats");
         String reload = app.reloadWithConfig(new GatewayDiskConfig(
                 defaultRoutes(),
                 defaultProfiles(),
@@ -235,6 +246,7 @@ public class Main {
         private volatile GatewayConfigSnapshot configSnapshot;
         private final Map<String, RateWindow> windowsByQuotaKey = new ConcurrentHashMap<String, RateWindow>();
         private final Map<String, ServiceMetrics> metricsByService = new ConcurrentHashMap<String, ServiceMetrics>();
+        private final Map<String, Integer> contractTransformCounts = new ConcurrentHashMap<String, Integer>();
         private final Map<String, CircuitBreakerState> circuitStates = new ConcurrentHashMap<String, CircuitBreakerState>();
         private final Deque<AuditEvent> auditEvents = new ArrayDeque<AuditEvent>();
         private final File projectRoot;
@@ -343,6 +355,7 @@ public class Main {
                 )));
             }
 
+            recordContractTransform(service);
             GatewayResponse upstreamResponse = upstreamInvoker.invoke(route, request);
             int statusCode = upstreamResponse.statusCode;
             boolean authorized = statusCode >= 200 && statusCode < 300;
@@ -446,6 +459,7 @@ public class Main {
                     "metrics_history", metricsHistoryJson(),
                     "upstreams", upstreamsJson(),
                     "config", configJson(),
+                    "contract_transformations", contractTransformationsJson(),
                     "audit_summary", auditSummaryJson(recentAuditEntries),
                     "recent_audits", jsonObject(mapOf("items", "[" + String.join(",", recentAuditEntries) + "]"))
             ));
@@ -482,6 +496,23 @@ public class Main {
                 }
             }
             appendAudit(event);
+        }
+
+        private void recordContractTransform(String service) {
+            Integer count = contractTransformCounts.containsKey(service) ? contractTransformCounts.get(service) : 0;
+            contractTransformCounts.put(service, count + 1);
+        }
+
+        private String contractTransformationsJson() {
+            List<String> items = new ArrayList<String>();
+            for (RouteConfig route : configSnapshot.routesByService.values()) {
+                items.add(jsonObject(mapOf(
+                        "service", route.service,
+                        "target", contractTarget(route.service),
+                        "transform_count", contractTransformCounts.containsKey(route.service) ? contractTransformCounts.get(route.service) : 0
+                )));
+            }
+            return jsonObject(mapOf("items", "[" + String.join(",", items) + "]"));
         }
 
         private void appendAudit(AuditEvent event) {
@@ -797,6 +828,12 @@ public class Main {
         if ("qa".equals(route.service)) {
             return qaScenarioPayload(request);
         }
+        if ("compliance".equals(route.service)) {
+            return complianceCapabilityPayload(request);
+        }
+        if ("pricing".equals(route.service)) {
+            return pricingRuntimePayload(request);
+        }
         if (request.body == null || request.body.trim().isEmpty()) {
             return jsonObject(mapOf("prompt", "", "document", ""));
         }
@@ -839,6 +876,95 @@ public class Main {
                         "debug", debug
                 ))
         ));
+    }
+
+    private static String complianceCapabilityPayload(GatewayRequest request) {
+        String requestId = extractJsonString(request.body, "request_id");
+        if (requestId.isEmpty()) {
+            requestId = "gw-" + UUID.randomUUID().toString();
+        }
+        String tenantId = extractJsonString(request.body, "tenant_id");
+        if (tenantId.isEmpty()) {
+            tenantId = headerOrDefault(request, "x-tenant-id", "gateway");
+        }
+        String operatorId = extractJsonString(request.body, "operator_id");
+        if (operatorId.isEmpty()) {
+            operatorId = headerOrDefault(request, "x-operator-id", "gateway");
+        }
+        String document = extractJsonString(request.body, "document");
+        if (document.isEmpty()) {
+            document = extractJsonString(request.body, "prompt");
+        }
+        String debugRaw = extractJsonString(request.body, "debug");
+        boolean debug = "true".equalsIgnoreCase(debugRaw);
+        return jsonObject(mapOf(
+                "request_id", requestId,
+                "capability_code", "structured_extraction",
+                "tenant_id", tenantId,
+                "operator_id", operatorId,
+                "input", jsonObject(mapOf(
+                        "document", document
+                )),
+                "context", jsonObject(mapOf(
+                        "channel", "gateway",
+                        "source_system", "agent-gateway-basic",
+                        "service", "compliance"
+                )),
+                "options", jsonObject(mapOf(
+                        "debug", debug
+                ))
+        ));
+    }
+
+    private static String pricingRuntimePayload(GatewayRequest request) {
+        String requestId = extractJsonString(request.body, "request_id");
+        if (requestId.isEmpty()) {
+            requestId = "gw-" + UUID.randomUUID().toString();
+        }
+        String tenantId = extractJsonString(request.body, "tenant_id");
+        if (tenantId.isEmpty()) {
+            tenantId = headerOrDefault(request, "x-tenant-id", "gateway");
+        }
+        String operatorId = extractJsonString(request.body, "operator_id");
+        if (operatorId.isEmpty()) {
+            operatorId = headerOrDefault(request, "x-operator-id", "gateway");
+        }
+        String payload = extractJsonString(request.body, "payload");
+        if (payload.isEmpty()) {
+            payload = extractJsonString(request.body, "prompt");
+        }
+        String debugRaw = extractJsonString(request.body, "debug");
+        boolean debug = "true".equalsIgnoreCase(debugRaw);
+        return jsonObject(mapOf(
+                "request_id", requestId,
+                "task_type", "pricing_inference",
+                "tenant_id", tenantId,
+                "operator_id", operatorId,
+                "input", jsonObject(mapOf(
+                        "payload", payload
+                )),
+                "context", jsonObject(mapOf(
+                        "channel", "gateway",
+                        "source_system", "agent-gateway-basic",
+                        "service", "pricing"
+                )),
+                "options", jsonObject(mapOf(
+                        "debug", debug
+                ))
+        ));
+    }
+
+    private static String contractTarget(String service) {
+        if ("qa".equals(service)) {
+            return "L2.intelligent_qa";
+        }
+        if ("compliance".equals(service)) {
+            return "L3.structured_extraction";
+        }
+        if ("pricing".equals(service)) {
+            return "L4.pricing_inference";
+        }
+        return "raw";
     }
 
     private static String headerOrDefault(GatewayRequest request, String headerName, String defaultValue) {
