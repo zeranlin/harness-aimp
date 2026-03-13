@@ -22,6 +22,9 @@ Route health config:
 - `service.<name>.health_url=<upstream_health_endpoint>`
 
 API:
+- `GET /`
+- `GET /console`
+- `GET /assets/app.js`
 - `GET /health`
 - `GET|POST /gateway/v1/invoke?service=<qa|compliance|pricing>`
 - `GET /ops/metrics/overview`
@@ -30,7 +33,12 @@ API:
 - `GET /ops/config`
 - `GET /ops/upstreams`
 - `GET /ops/overview`
+- `GET /ops/layers`
+- `GET /ops/l2/scenarios`
+- `GET /ops/l3/capabilities`
+- `GET /ops/l4/runtime`
 - `POST /ops/reload`
+- `POST /debug/request?service=<qa|compliance|pricing>`
 
 Headers:
 - `x-api-key: demo-key-ops`
@@ -73,3 +81,5 @@ Capabilities:
 - Compliance 与 Pricing 请求契约已分别对齐到 L3/L4 标准接口
 - `/ops/overview` 已包含契约转换统计
 - `/ops/overview` 已包含按契约类型聚合的错误码统计
+- 已提供 L1 控制台 MVP：Dashboard、Debug Studio、Scenarios、Model Runtime
+- 已提供 L2-L4 聚合接口，供控制台读取

@@ -10,4 +10,5 @@ Entrypoints:
 
 API:
 - `GET /health`
+- `GET /capabilities`
 - `POST /invoke`

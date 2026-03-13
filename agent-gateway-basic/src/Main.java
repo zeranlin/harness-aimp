@@ -94,6 +94,30 @@ public class Main {
                 return GatewayResponse.ok(app.overviewJson());
             }
         }));
+        server.createContext("/ops/layers", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) {
+                return GatewayResponse.ok(app.layersJson());
+            }
+        }));
+        server.createContext("/ops/l2/scenarios", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) {
+                return GatewayResponse.ok(app.l2ScenariosJson());
+            }
+        }));
+        server.createContext("/ops/l3/capabilities", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) {
+                return GatewayResponse.ok(app.l3CapabilitiesJson());
+            }
+        }));
+        server.createContext("/ops/l4/runtime", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) {
+                return GatewayResponse.ok(app.l4RuntimeJson());
+            }
+        }));
         server.createContext("/ops/reload", new JsonHandler(new ExchangeProcessor() {
             @Override
             public GatewayResponse handle(HttpExchange exchange) throws IOException {
@@ -106,6 +130,21 @@ public class Main {
                 return GatewayResponse.ok(app.reloadJson());
             }
         }));
+        server.createContext("/debug/request", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) throws IOException {
+                if (!"POST".equals(exchange.getRequestMethod())) {
+                    return GatewayResponse.json(405, jsonObject(mapOf(
+                            "status", "error",
+                            "message", "method not allowed"
+                    )));
+                }
+                return GatewayResponse.ok(app.debugRequestJson(GatewayRequest.fromExchange(exchange)));
+            }
+        }));
+        server.createContext("/", new ConsoleIndexHandler(app.projectRoot));
+        server.createContext("/console", new ConsoleIndexHandler(app.projectRoot));
+        server.createContext("/assets/app.js", new StaticFileHandler(new File(app.projectRoot, "ui/app.js"), "application/javascript; charset=utf-8"));
         server.setExecutor(null);
         System.out.println("agent-gateway-basic listening on " + PORT);
         server.start();
@@ -184,6 +223,19 @@ public class Main {
         assertContains(overview, "\"upstreams\":", "overview endpoint should embed upstreams");
         assertContains(overview, "\"contract_transformations\":", "overview endpoint should expose contract mapping stats");
         assertContains(overview, "\"contract_error_codes\":", "overview endpoint should expose contract error code stats");
+        assertContains(app.layersJson(), "\"layer\":\"L2\"", "layers endpoint should expose downstream layers");
+        assertContains(app.l2ScenariosJson(), "\"status\":\"error\"", "l2 scenarios fallback should stay machine-readable");
+        assertContains(app.l3CapabilitiesJson(), "\"status\":\"error\"", "l3 capabilities fallback should stay machine-readable");
+        assertContains(app.l4RuntimeJson(), "\"status\":\"error\"", "l4 runtime fallback should stay machine-readable");
+        String debugRequest = app.debugRequestJson(new GatewayRequest(
+                "POST",
+                "/debug/request",
+                stringMapOf("service", "qa"),
+                stringMapOf("x-api-key", "demo-key-ops"),
+                "{\"prompt\":\"debug me\"}"
+        ));
+        assertContains(debugRequest, "\"target_contract\":\"L2.intelligent_qa\"", "debug request should expose target contract");
+        assertContains(debugRequest, "\"question\":\"debug me\"", "debug request should expose transformed payload");
         String reload = app.reloadWithConfig(new GatewayDiskConfig(
                 defaultRoutes(),
                 defaultProfiles(),
@@ -467,6 +519,68 @@ public class Main {
             ));
         }
 
+        String layersJson() {
+            List<String> items = new ArrayList<String>();
+            items.add(layerItem("L1", "agent-gateway-basic", true, "embedded", "/ops/overview"));
+            items.add(layerItem("L2", "agent-business-solution", httpOk("http://127.0.0.1:8002/health"), "http", "/ops/l2/scenarios"));
+            items.add(layerItem("L3", "atomic-ai-service", httpOk("http://127.0.0.1:8003/health"), "http", "/ops/l3/capabilities"));
+            items.add(layerItem("L4", "agent-model-runtime", httpOk("http://127.0.0.1:8081/health"), "http", "/ops/l4/runtime"));
+            items.add(layerItem("L5", "agent-knowledge-ops", httpOk("http://127.0.0.1:8004/health"), "http", "http://127.0.0.1:8004/health"));
+            items.add(layerItem("L6", "agent-model-hub", httpOk("http://127.0.0.1:8005/health"), "http", "http://127.0.0.1:8005/health"));
+            items.add(layerItem("L7", "agent-platform-foundation", scriptOk(new File(projectRoot, "../agent-platform-foundation/scripts/healthcheck.sh")), "script", "../agent-platform-foundation/scripts/healthcheck.sh"));
+            return jsonObject(mapOf("items", "[" + String.join(",", items) + "]"));
+        }
+
+        String l2ScenariosJson() {
+            return fetchJson("http://127.0.0.1:8002/scenarios", jsonObject(mapOf(
+                    "status", "error",
+                    "message", "l2 unavailable",
+                    "items", "[]"
+            )));
+        }
+
+        String l3CapabilitiesJson() {
+            return fetchJson("http://127.0.0.1:8003/capabilities", jsonObject(mapOf(
+                    "status", "error",
+                    "message", "l3 unavailable",
+                    "items", "[]"
+            )));
+        }
+
+        String l4RuntimeJson() {
+            return fetchJson("http://127.0.0.1:8081/ops/runtime", jsonObject(mapOf(
+                    "status", "error",
+                    "message", "l4 unavailable"
+            )));
+        }
+
+        String debugRequestJson(GatewayRequest request) {
+            String service = request.queryParams.containsKey("service") ? request.queryParams.get("service") : "qa";
+            RouteConfig route = configSnapshot.routesByService.get(service);
+            if (route == null) {
+                return jsonObject(mapOf(
+                        "status", "error",
+                        "message", "unknown service",
+                        "service", service
+                ));
+            }
+            GatewayRequest invokeRequest = new GatewayRequest(
+                    "POST",
+                    "/gateway/v1/invoke",
+                    stringMapOf("service", service),
+                    request.headers,
+                    request.body
+            );
+            String transformedPayload = buildUpstreamPayload(route, invokeRequest);
+            GatewayResponse gatewayResponse = invoke(invokeRequest);
+            return jsonObject(mapOf(
+                    "service", service,
+                    "target_contract", contractTarget(service),
+                    "transformed_request", transformedPayload,
+                    "gateway_response", gatewayResponse.body
+            ));
+        }
+
         synchronized String reloadJson() throws IOException {
             return reloadWithConfig(GatewayDiskConfig.load(projectRoot));
         }
@@ -503,6 +617,79 @@ public class Main {
         private void recordContractTransform(String service) {
             Integer count = contractTransformCounts.containsKey(service) ? contractTransformCounts.get(service) : 0;
             contractTransformCounts.put(service, count + 1);
+        }
+
+        private String layerItem(String layer, String project, boolean healthy, String healthMode, String target) {
+            return jsonObject(mapOf(
+                    "layer", layer,
+                    "project", project,
+                    "healthy", healthy,
+                    "status", healthy ? "UP" : "DOWN",
+                    "health_mode", healthMode,
+                    "target", target
+            ));
+        }
+
+        private boolean httpOk(String url) {
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(url).openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(1000);
+                connection.setReadTimeout(1000);
+                int statusCode = connection.getResponseCode();
+                return statusCode >= 200 && statusCode < 300;
+            } catch (IOException exception) {
+                return false;
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        }
+
+        private boolean scriptOk(File scriptFile) {
+            if (!scriptFile.exists()) {
+                return false;
+            }
+            Process process = null;
+            try {
+                process = new ProcessBuilder(scriptFile.getAbsolutePath()).start();
+                int exitCode = process.waitFor();
+                return exitCode == 0;
+            } catch (IOException exception) {
+                return false;
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                return false;
+            } finally {
+                if (process != null) {
+                    process.destroy();
+                }
+            }
+        }
+
+        private String fetchJson(String url, String fallbackJson) {
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(url).openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(1000);
+                connection.setReadTimeout(1500);
+                int statusCode = connection.getResponseCode();
+                InputStream inputStream = statusCode >= 400 ? connection.getErrorStream() : connection.getInputStream();
+                String responseBody = inputStream == null ? "" : readBody(inputStream);
+                if (responseBody == null || responseBody.trim().isEmpty()) {
+                    return fallbackJson;
+                }
+                return responseBody;
+            } catch (IOException exception) {
+                return fallbackJson;
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
         }
 
         private String contractTransformationsJson() {
@@ -1042,6 +1229,42 @@ public class Main {
         }
     }
 
+    private static final class ConsoleIndexHandler implements HttpHandler {
+        private final File indexFile;
+
+        private ConsoleIndexHandler(File projectRoot) {
+            this.indexFile = new File(projectRoot, "ui/index.html");
+        }
+
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            String path = exchange.getRequestURI().getPath();
+            if (!"/".equals(path) && !"/console".equals(path)) {
+                writeResponse(exchange, GatewayResponse.json(404, jsonObject(mapOf(
+                        "status", "error",
+                        "message", "not found"
+                ))));
+                return;
+            }
+            writeFile(exchange, indexFile, "text/html; charset=utf-8");
+        }
+    }
+
+    private static final class StaticFileHandler implements HttpHandler {
+        private final File file;
+        private final String contentType;
+
+        private StaticFileHandler(File file, String contentType) {
+            this.file = file;
+            this.contentType = contentType;
+        }
+
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            writeFile(exchange, file, contentType);
+        }
+    }
+
     @FunctionalInterface
     private interface ExchangeProcessor {
         GatewayResponse handle(HttpExchange exchange) throws IOException;
@@ -1281,6 +1504,32 @@ public class Main {
         }
     }
 
+    private static void writeFile(HttpExchange exchange, File file, String contentType) throws IOException {
+        if (!file.exists()) {
+            writeResponse(exchange, GatewayResponse.json(404, jsonObject(mapOf(
+                    "status", "error",
+                    "message", "file not found"
+            ))));
+            return;
+        }
+        FileInputStream inputStream = null;
+        try {
+            inputStream = new FileInputStream(file);
+            byte[] bytes = readAllBytes(inputStream);
+            Headers headers = exchange.getResponseHeaders();
+            headers.set("Content-Type", contentType);
+            headers.set("X-Gateway", "agent-gateway-basic");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream outputStream = exchange.getResponseBody()) {
+                outputStream.write(bytes);
+            }
+        } finally {
+            if (inputStream != null) {
+                inputStream.close();
+            }
+        }
+    }
+
     private static Map<String, String> parseQueryParams(URI uri) {
         String rawQuery = uri.getRawQuery();
         if (rawQuery == null || rawQuery.trim().isEmpty()) {
@@ -1312,6 +1561,16 @@ public class Main {
             outputStream.write(buffer, 0, read);
         }
         return new String(outputStream.toByteArray(), StandardCharsets.UTF_8);
+    }
+
+    private static byte[] readAllBytes(InputStream inputStream) throws IOException {
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        byte[] buffer = new byte[1024];
+        int read;
+        while ((read = inputStream.read(buffer)) != -1) {
+            outputStream.write(buffer, 0, read);
+        }
+        return outputStream.toByteArray();
     }
 
     private static Set<String> csvToSet(String csv) {

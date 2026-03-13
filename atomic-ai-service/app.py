@@ -26,6 +26,19 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             self._json(200, {"status": "UP", "service": "atomic-ai-service"})
             return
+        if self.path == "/capabilities":
+            self._json(200, {
+                "items": [
+                    {
+                        "capability_code": "structured_extraction",
+                        "name": "Structured Extraction",
+                        "status": "active",
+                        "input": ["input.document"],
+                        "outputs": ["evidence_count", "risk_level"]
+                    }
+                ]
+            })
+            return
         self._json(404, {"status": "error", "message": "not found"})
 
     def do_POST(self):

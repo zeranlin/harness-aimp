@@ -21,6 +21,11 @@ public class Main {
         int port = 8081;
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
         server.createContext("/health", new JsonHandler("{\"status\":\"UP\",\"service\":\"agent-model-runtime\"}"));
+        server.createContext("/ops/runtime", new JsonHandler("{\"status\":\"UP\",\"service\":\"agent-model-runtime\","
+                + "\"queue_depth\":0,\"inflight\":0,\"max_concurrency\":8,"
+                + "\"retry_policy\":{\"max_attempts\":2,\"timeout_ms\":2000},"
+                + "\"circuit_breakers\":[{\"route\":\"pricing_inference\",\"state\":\"CLOSED\"}],"
+                + "\"routes\":[{\"task_type\":\"pricing_inference\",\"model_route\":\"general-llm-v1\"}]}"));
         server.createContext("/invoke", new InvokeHandler());
         server.setExecutor(null);
         System.out.println("agent-model-runtime listening on " + port);

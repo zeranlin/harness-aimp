@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent Gateway Console</title>
+    <style>
+      :root {
+        --bg: #f3efe6;
+        --paper: rgba(255, 251, 244, 0.88);
+        --ink: #182126;
+        --muted: #5f6b73;
+        --line: rgba(24, 33, 38, 0.12);
+        --warm: #cf6f2d;
+        --teal: #0c7c7c;
+        --olive: #677a3d;
+        --danger: #a83c32;
+        --shadow: 0 18px 42px rgba(23, 33, 42, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Avenir Next", "Segoe UI", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(207, 111, 45, 0.18), transparent 30%),
+          radial-gradient(circle at bottom right, rgba(12, 124, 124, 0.2), transparent 32%),
+          linear-gradient(160deg, #f6f1e8 0%, #e7ecdf 100%);
+      }
+
+      .shell {
+        width: min(1240px, calc(100vw - 32px));
+        margin: 24px auto 40px;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: 1.3fr 0.7fr;
+        gap: 20px;
+        margin-bottom: 20px;
+      }
+
+      .panel {
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(12px);
+      }
+
+      .hero-main {
+        padding: 28px;
+      }
+
+      .eyebrow {
+        font-size: 12px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--teal);
+        margin-bottom: 10px;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-family: "Iowan Old Style", "Palatino Linotype", serif;
+        font-size: clamp(32px, 5vw, 56px);
+        line-height: 0.96;
+      }
+
+      .hero-main p,
+      .hero-side p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .hero-side {
+        padding: 24px;
+        display: grid;
+        gap: 16px;
+      }
+
+      .stat-grid,
+      .layer-grid,
+      .section-grid {
+        display: grid;
+        gap: 16px;
+      }
+
+      .stat-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        margin-bottom: 18px;
+      }
+
+      .stat-card,
+      .layer-card,
+      .section-card {
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 18px;
+      }
+
+      .label {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      .value {
+        margin-top: 8px;
+        font-size: 28px;
+        font-weight: 700;
+      }
+
+      .section {
+        padding: 22px;
+        margin-bottom: 18px;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+
+      .section-head h2 {
+        margin: 0;
+        font-size: 22px;
+        font-family: "Iowan Old Style", "Palatino Linotype", serif;
+      }
+
+      button,
+      select,
+      input,
+      textarea {
+        font: inherit;
+      }
+
+      button {
+        border: 0;
+        border-radius: 999px;
+        padding: 11px 16px;
+        background: var(--ink);
+        color: #fff;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        background: transparent;
+        color: var(--ink);
+        border: 1px solid var(--line);
+      }
+
+      .layer-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .layer-card.good { border-left: 4px solid var(--olive); }
+      .layer-card.bad { border-left: 4px solid var(--danger); }
+
+      .debug-layout {
+        display: grid;
+        grid-template-columns: 0.95fr 1.05fr;
+        gap: 18px;
+      }
+
+      .form-stack,
+      .response-stack {
+        display: grid;
+        gap: 12px;
+      }
+
+      .field label {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      select,
+      input,
+      textarea {
+        width: 100%;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.9);
+        color: var(--ink);
+        padding: 12px 14px;
+      }
+
+      textarea {
+        min-height: 160px;
+        resize: vertical;
+        font-family: "SFMono-Regular", "Menlo", monospace;
+      }
+
+      pre {
+        margin: 0;
+        padding: 14px;
+        border-radius: 16px;
+        background: #171f26;
+        color: #eff4f6;
+        overflow: auto;
+        min-height: 180px;
+        font-family: "SFMono-Regular", "Menlo", monospace;
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .chip {
+        border-radius: 999px;
+        padding: 6px 10px;
+        background: rgba(12, 124, 124, 0.1);
+        color: var(--teal);
+        font-size: 12px;
+      }
+
+      @media (max-width: 980px) {
+        .hero,
+        .debug-layout,
+        .layer-grid,
+        .stat-grid,
+        .section-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <section class="hero">
+        <div class="panel hero-main">
+          <div class="eyebrow">L1 Operations Console</div>
+          <h1>Gateway Control Plane</h1>
+          <p>统一运营七层服务，调试契约转换，查看场景、能力、运行时与错误分布。</p>
+        </div>
+        <div class="panel hero-side">
+          <div>
+            <div class="label">Current Focus</div>
+            <div class="value" style="font-size: 18px;">Dashboard / Debug Studio / Scenarios / Runtime</div>
+          </div>
+          <p>本页由 `agent-gateway-basic` 直接提供，用于验证 L1 控制台 MVP 的聚合接口和调试工作流。</p>
+        </div>
+      </section>
+
+      <section class="panel section">
+        <div class="section-head">
+          <h2>Dashboard</h2>
+          <button id="refresh-dashboard">刷新总览</button>
+        </div>
+        <div class="stat-grid" id="stats"></div>
+        <div class="layer-grid" id="layers"></div>
+      </section>
+
+      <section class="panel section">
+        <div class="section-head">
+          <h2>Debug Studio</h2>
+          <div class="chips">
+            <span class="chip">契约转换预览</span>
+            <span class="chip">真实网关调用</span>
+          </div>
+        </div>
+        <div class="debug-layout">
+          <div class="form-stack">
+            <div class="field">
+              <label for="service">Service</label>
+              <select id="service">
+                <option value="qa">qa</option>
+                <option value="compliance">compliance</option>
+                <option value="pricing">pricing</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="api-key">x-api-key</label>
+              <input id="api-key" value="demo-key-ops" />
+            </div>
+            <div class="field">
+              <label for="tenant-id">x-tenant-id</label>
+              <input id="tenant-id" value="demo" />
+            </div>
+            <div class="field">
+              <label for="operator-id">x-operator-id</label>
+              <input id="operator-id" value="operator-1" />
+            </div>
+            <div class="field">
+              <label for="request-body">Raw Request Body</label>
+              <textarea id="request-body">{ "prompt": "采购评审里废标条款怎么判断？" }</textarea>
+            </div>
+            <div class="chips">
+              <button id="send-debug">发送调试请求</button>
+            </div>
+          </div>
+          <div class="response-stack">
+            <div>
+              <div class="label">Transformed Contract</div>
+              <pre id="transformed-request">{}</pre>
+            </div>
+            <div>
+              <div class="label">Gateway Response</div>
+              <pre id="gateway-response">{}</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="section-grid">
+        <section class="panel section">
+          <div class="section-head">
+            <h2>Scenarios</h2>
+            <button class="secondary" id="refresh-scenarios">刷新场景</button>
+          </div>
+          <div id="scenarios"></div>
+        </section>
+
+        <section class="panel section">
+          <div class="section-head">
+            <h2>Model Runtime</h2>
+            <button class="secondary" id="refresh-runtime">刷新运行时</button>
+          </div>
+          <div id="runtime"></div>
+        </section>
+      </div>
+    </div>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>
