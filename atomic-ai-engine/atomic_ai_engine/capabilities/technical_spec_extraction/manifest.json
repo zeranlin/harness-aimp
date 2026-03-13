@@ -1,0 +1,14 @@
+{
+  "capability_code": "technical_spec_extraction",
+  "name": "技参提取",
+  "version": "0.1.0",
+  "status": "planned",
+  "entrypoint": "atomic_ai_engine.capabilities.technical_spec_extraction.service.TechnicalSpecExtractionCapability",
+  "input_schema": {
+    "type": "object"
+  },
+  "output_schema": {
+    "type": "object"
+  },
+  "depends_on_model_runtime": true
+}

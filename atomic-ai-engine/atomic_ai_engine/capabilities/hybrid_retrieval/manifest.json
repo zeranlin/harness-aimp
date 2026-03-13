@@ -1,0 +1,14 @@
+{
+  "capability_code": "hybrid_retrieval",
+  "name": "混合检索",
+  "version": "0.1.0",
+  "status": "planned",
+  "entrypoint": "atomic_ai_engine.capabilities.hybrid_retrieval.service.HybridRetrievalCapability",
+  "input_schema": {
+    "type": "object"
+  },
+  "output_schema": {
+    "type": "object"
+  },
+  "depends_on_model_runtime": false
+}

@@ -1,0 +1,14 @@
+{
+  "capability_code": "multi_recall",
+  "name": "多路召回",
+  "version": "0.1.0",
+  "status": "planned",
+  "entrypoint": "atomic_ai_engine.capabilities.multi_recall.service.MultiRecallCapability",
+  "input_schema": {
+    "type": "object"
+  },
+  "output_schema": {
+    "type": "object"
+  },
+  "depends_on_model_runtime": false
+}

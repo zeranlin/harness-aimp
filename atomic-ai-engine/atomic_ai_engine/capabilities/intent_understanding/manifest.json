@@ -1,0 +1,14 @@
+{
+  "capability_code": "intent_understanding",
+  "name": "意图理解",
+  "version": "0.1.0",
+  "status": "active",
+  "entrypoint": "atomic_ai_engine.capabilities.intent_understanding.service.IntentUnderstandingCapability",
+  "input_schema": {
+    "type": "object"
+  },
+  "output_schema": {
+    "type": "object"
+  },
+  "depends_on_model_runtime": true
+}

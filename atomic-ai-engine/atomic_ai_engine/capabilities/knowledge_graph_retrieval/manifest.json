@@ -1,0 +1,14 @@
+{
+  "capability_code": "knowledge_graph_retrieval",
+  "name": "知识图谱检索",
+  "version": "0.1.0",
+  "status": "planned",
+  "entrypoint": "atomic_ai_engine.capabilities.knowledge_graph_retrieval.service.KnowledgeGraphRetrievalCapability",
+  "input_schema": {
+    "type": "object"
+  },
+  "output_schema": {
+    "type": "object"
+  },
+  "depends_on_model_runtime": false
+}

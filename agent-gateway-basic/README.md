@@ -59,7 +59,7 @@ QA contract mapping:
 - `x-tenant-id`、`x-operator-id` 会映射为 `tenant_id`、`operator_id`
 
 Compliance contract mapping:
-- 当 `service=compliance` 时，L1 会把网关请求转换为 L3 `atomic-ai-service` 的标准能力契约。
+- 当 `service=compliance` 时，L1 会把网关请求转换为 L3 `atomic-ai-engine` 的标准能力契约。
 - `document` 或 `prompt` 会映射为 `input.document`
 - `service=compliance` 会映射为 `capability_code=structured_extraction`
 

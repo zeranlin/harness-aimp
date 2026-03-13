@@ -318,7 +318,7 @@ public class Main {
     private static Map<String, RouteConfig> defaultRoutes() {
         Map<String, RouteConfig> routes = new LinkedHashMap<String, RouteConfig>();
         routes.put("qa", new RouteConfig("qa", "agent-business-solution", "http://127.0.0.1:8002/invoke", "http://127.0.0.1:8002/health"));
-        routes.put("compliance", new RouteConfig("compliance", "atomic-ai-service", "http://127.0.0.1:8003/invoke", "http://127.0.0.1:8003/health"));
+        routes.put("compliance", new RouteConfig("compliance", "atomic-ai-engine", "http://127.0.0.1:8003/invoke", "http://127.0.0.1:8003/health"));
         routes.put("pricing", new RouteConfig("pricing", "agent-model-runtime", "http://127.0.0.1:8081/invoke", "http://127.0.0.1:8081/health"));
         return routes;
     }
@@ -576,7 +576,7 @@ public class Main {
             List<String> items = new ArrayList<String>();
             items.add(layerItem("L1", "agent-gateway-basic", true, "embedded", "/ops/overview"));
             items.add(layerItem("L2", "agent-business-solution", httpOk("http://127.0.0.1:8002/health"), "http", "/ops/l2/scenarios"));
-            items.add(layerItem("L3", "atomic-ai-service", httpOk("http://127.0.0.1:8003/health"), "http", "/ops/l3/capabilities"));
+            items.add(layerItem("L3", "atomic-ai-engine", httpOk("http://127.0.0.1:8003/health"), "http", "/ops/l3/capabilities"));
             items.add(layerItem("L4", "agent-model-runtime", httpOk("http://127.0.0.1:8081/health"), "http", "/ops/l4/runtime"));
             items.add(layerItem("L5", "agent-knowledge-ops", httpOk("http://127.0.0.1:8004/health"), "http", "http://127.0.0.1:8004/health"));
             items.add(layerItem("L6", "agent-model-hub", httpOk("http://127.0.0.1:8005/health"), "http", "http://127.0.0.1:8005/health"));

@@ -1,0 +1,14 @@
+{
+  "capability_code": "logic_tree_explanation",
+  "name": "逻辑树解释",
+  "version": "0.1.0",
+  "status": "planned",
+  "entrypoint": "atomic_ai_engine.capabilities.logic_tree_explanation.service.LogicTreeExplanationCapability",
+  "input_schema": {
+    "type": "object"
+  },
+  "output_schema": {
+    "type": "object"
+  },
+  "depends_on_model_runtime": true
+}

@@ -6,7 +6,7 @@
   "orchestrator_type": "programmatic",
   "entrypoint": "scenarios.intelligent_qa.service",
   "dependencies": [
-    "atomic-ai-service",
+    "atomic-ai-engine",
     "agent-model-runtime"
   ],
   "input_schema": {

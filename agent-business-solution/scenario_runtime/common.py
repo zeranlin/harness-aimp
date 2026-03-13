@@ -170,7 +170,7 @@ class ScenarioService:
             )
 
         capability_call = call_dependency(
-            "atomic-ai-service",
+            "atomic-ai-engine",
             "http://127.0.0.1:8003/invoke",
             {
                 "request_id": request_id,
@@ -185,7 +185,7 @@ class ScenarioService:
             return 502, self.error_response(
                 request_id,
                 capability_call["error_code"] or "UPSTREAM_L3_ERROR",
-                capability_call["payload"].get("message", "atomic-ai-service failed"),
+                capability_call["payload"].get("message", "atomic-ai-engine failed"),
                 started_at,
                 [{
                     "service": capability_call["service"],
@@ -235,7 +235,7 @@ class ScenarioService:
             "evidence": [
                 {
                     "type": "capability_output",
-                    "source": "atomic-ai-service",
+                    "source": "atomic-ai-engine",
                     "snippet": f"已识别 {capability_call['payload'].get('evidence_count', 0)} 条候选证据。",
                 }
             ],

@@ -1,0 +1,14 @@
+{
+  "capability_code": "fusion_rerank",
+  "name": "融合重排序",
+  "version": "0.1.0",
+  "status": "planned",
+  "entrypoint": "atomic_ai_engine.capabilities.fusion_rerank.service.FusionRerankCapability",
+  "input_schema": {
+    "type": "object"
+  },
+  "output_schema": {
+    "type": "object"
+  },
+  "depends_on_model_runtime": false
+}

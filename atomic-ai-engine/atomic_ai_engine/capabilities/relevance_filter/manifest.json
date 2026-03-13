@@ -1,0 +1,14 @@
+{
+  "capability_code": "relevance_filter",
+  "name": "相关性过滤",
+  "version": "0.1.0",
+  "status": "planned",
+  "entrypoint": "atomic_ai_engine.capabilities.relevance_filter.service.RelevanceFilterCapability",
+  "input_schema": {
+    "type": "object"
+  },
+  "output_schema": {
+    "type": "object"
+  },
+  "depends_on_model_runtime": false
+}

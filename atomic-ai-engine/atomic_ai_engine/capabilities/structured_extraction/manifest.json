@@ -1,0 +1,14 @@
+{
+  "capability_code": "structured_extraction",
+  "name": "结构化提取",
+  "version": "0.1.0",
+  "status": "active",
+  "entrypoint": "atomic_ai_engine.capabilities.structured_extraction.service.StructuredExtractionCapability",
+  "input_schema": {
+    "type": "object"
+  },
+  "output_schema": {
+    "type": "object"
+  },
+  "depends_on_model_runtime": true
+}

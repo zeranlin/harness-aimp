@@ -1,0 +1,14 @@
+{
+  "capability_code": "clause_extraction",
+  "name": "条款提取",
+  "version": "0.1.0",
+  "status": "planned",
+  "entrypoint": "atomic_ai_engine.capabilities.clause_extraction.service.ClauseExtractionCapability",
+  "input_schema": {
+    "type": "object"
+  },
+  "output_schema": {
+    "type": "object"
+  },
+  "depends_on_model_runtime": true
+}

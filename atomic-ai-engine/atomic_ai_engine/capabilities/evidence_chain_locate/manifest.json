@@ -1,0 +1,14 @@
+{
+  "capability_code": "evidence_chain_locate",
+  "name": "证据链定位",
+  "version": "0.1.0",
+  "status": "active",
+  "entrypoint": "atomic_ai_engine.capabilities.evidence_chain_locate.service.EvidenceChainLocateCapability",
+  "input_schema": {
+    "type": "object"
+  },
+  "output_schema": {
+    "type": "object"
+  },
+  "depends_on_model_runtime": false
+}

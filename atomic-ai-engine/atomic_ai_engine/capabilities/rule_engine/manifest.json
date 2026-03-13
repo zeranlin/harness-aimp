@@ -1,0 +1,14 @@
+{
+  "capability_code": "rule_engine",
+  "name": "规则引擎",
+  "version": "0.1.0",
+  "status": "active",
+  "entrypoint": "atomic_ai_engine.capabilities.rule_engine.service.RuleEngineCapability",
+  "input_schema": {
+    "type": "object"
+  },
+  "output_schema": {
+    "type": "object"
+  },
+  "depends_on_model_runtime": false
+}

@@ -1,0 +1,14 @@
+{
+  "capability_code": "problem_decomposition",
+  "name": "问题拆解",
+  "version": "0.1.0",
+  "status": "planned",
+  "entrypoint": "atomic_ai_engine.capabilities.problem_decomposition.service.ProblemDecompositionCapability",
+  "input_schema": {
+    "type": "object"
+  },
+  "output_schema": {
+    "type": "object"
+  },
+  "depends_on_model_runtime": true
+}
