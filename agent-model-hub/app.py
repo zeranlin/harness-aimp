@@ -34,6 +34,18 @@ class ModelHubStore:
                 "recommended_version": "v1",
                 "capabilities": ["fusion_rerank", "relevance_filter"],
             },
+            "model-qwen35-27b": {
+                "model_id": "model-qwen35-27b",
+                "name": "qwen3.5-27b",
+                "type": "llm",
+                "provider": "openai-compatible",
+                "status": "active",
+                "current_version": "qwen3.5-27b",
+                "recommended_version": "qwen3.5-27b",
+                "capabilities": ["pricing_inference", "structured_extraction", "document_extraction", "intent_understanding"],
+                "endpoint": "http://112.111.54.86:10011/v1",
+                "auth_env": "AGENT_MODEL_HUB_QWEN35_27B_API_KEY",
+            },
             "model-ocr": {
                 "model_id": "model-ocr",
                 "name": "ocr",
@@ -69,6 +81,15 @@ class ModelHubStore:
                     "status": "active",
                     "released_at": now_iso(),
                     "compatibility": ["fusion_rerank", "relevance_filter"],
+                }
+            ],
+            "model-qwen35-27b": [
+                {
+                    "model_id": "model-qwen35-27b",
+                    "version": "qwen3.5-27b",
+                    "status": "active",
+                    "released_at": now_iso(),
+                    "compatibility": ["pricing_inference", "structured_extraction", "document_extraction", "intent_understanding"],
                 }
             ],
             "model-ocr": [
@@ -109,24 +130,39 @@ class ModelHubStore:
                 "cost_per_1k_tokens": 0.05,
                 "winner": "reranker-v1",
             },
+            {
+                "model_id": "model-qwen35-27b",
+                "version": "qwen3.5-27b",
+                "benchmark": "document-extraction-baseline",
+                "score": 95,
+                "latency_ms": 780,
+                "cost_per_1k_tokens": 0.22,
+                "winner": "qwen3.5-27b",
+            },
         ]
         self.route_recommendations = {
             "pricing_inference": {
                 "task_type": "pricing_inference",
-                "preferred_model": "general-llm:v1",
-                "fallback_model": "general-llm:v2-beta",
-                "policy_mode": "cost-balanced",
+                "preferred_model": "qwen3.5-27b:qwen3.5-27b",
+                "fallback_model": "general-llm:v1",
+                "policy_mode": "quality-first",
             },
             "structured_extraction": {
                 "task_type": "structured_extraction",
-                "preferred_model": "general-llm:v1",
+                "preferred_model": "qwen3.5-27b:qwen3.5-27b",
+                "fallback_model": "general-llm:v1",
+                "policy_mode": "quality-first",
+            },
+            "document_extraction": {
+                "task_type": "document_extraction",
+                "preferred_model": "qwen3.5-27b:qwen3.5-27b",
                 "fallback_model": "ocr:v1",
                 "policy_mode": "quality-first",
             },
             "intent_understanding": {
                 "task_type": "intent_understanding",
                 "preferred_model": "general-llm:v1",
-                "fallback_model": "general-llm:v2-beta",
+                "fallback_model": "qwen3.5-27b:qwen3.5-27b",
                 "policy_mode": "latency-first",
             },
         }
@@ -136,6 +172,7 @@ class ModelHubStore:
             "models": [
                 {"model_id": "model-general-llm", "version": "v1", "input_cost": 0.12, "output_cost": 0.18},
                 {"model_id": "model-reranker", "version": "v1", "input_cost": 0.02, "output_cost": 0.05},
+                {"model_id": "model-qwen35-27b", "version": "qwen3.5-27b", "input_cost": 0.16, "output_cost": 0.22},
                 {"model_id": "model-ocr", "version": "v1", "input_cost": 0.08, "output_cost": 0.10},
             ],
         }
@@ -259,6 +296,7 @@ class ModelHubStore:
                 "active_models": len([item for item in models if item["status"] == "active"]),
                 "evaluation_count": len(evaluations),
                 "route_count": len(self.route_recommendations),
+                "remote_endpoints": len([item for item in models if item.get("endpoint")]),
             },
         }
 
