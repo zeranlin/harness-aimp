@@ -2,6 +2,7 @@
   "scenarios": [
     "intelligent_qa",
     "contract_review",
-    "compliance_review"
+    "compliance_review",
+    "procurement_file_review"
   ]
 }

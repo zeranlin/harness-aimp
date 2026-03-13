@@ -1,0 +1,32 @@
+{
+  "scenario_code": "procurement_file_review",
+  "name": "Procurement File Review",
+  "version": "0.1.0",
+  "status": "active",
+  "orchestrator_type": "programmatic",
+  "entrypoint": "scenarios.procurement_file_review.service",
+  "dependencies": [
+    "atomic-ai-engine",
+    "agent-model-runtime"
+  ],
+  "input_schema": {
+    "required": [
+      "input.file_content"
+    ]
+  },
+  "output_schema": {
+    "result": [
+      "review_summary",
+      "parsed_document_type",
+      "rule_matched",
+      "matched_rules",
+      "fallback_used",
+      "risk_level",
+      "model_route",
+      "evidence_count"
+    ],
+    "metrics": [
+      "duration_ms"
+    ]
+  }
+}

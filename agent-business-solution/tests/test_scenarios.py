@@ -13,6 +13,7 @@ def run():
     assert registry.get("intelligent_qa")["scenario_code"] == "intelligent_qa"
     assert registry.get("contract_review")["scenario_code"] == "contract_review"
     assert registry.get("compliance_review")["scenario_code"] == "compliance_review"
+    assert registry.get("procurement_file_review")["scenario_code"] == "procurement_file_review"
 
     runtime = ScenarioRuntime(registry)
     status_code, response = runtime.execute({"scenario_code": "missing"})
@@ -23,8 +24,9 @@ def run():
         {"scenario_code": "intelligent_qa", "status": "success", "duration_ms": 10, "errors": []},
         {"scenario_code": "contract_review", "status": "success", "duration_ms": 20, "errors": []},
         {"scenario_code": "compliance_review", "status": "error", "duration_ms": 30, "errors": [{"code": "UPSTREAM_L3_UNAVAILABLE", "message": "timeout"}]},
+        {"scenario_code": "procurement_file_review", "status": "success", "duration_ms": 12, "errors": []},
     ])
-    assert summary["total"] == 3
+    assert summary["total"] == 4
     assert summary["scenarios"]["compliance_review"]["error"] == 1
     assert summary["error_codes"]["UPSTREAM_L3_UNAVAILABLE"] == 1
     print("scenario-tests ok")

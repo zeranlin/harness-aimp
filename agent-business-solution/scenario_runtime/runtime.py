@@ -2,6 +2,7 @@ from scenario_runtime.common import CONFIG_FILE, SCENARIOS_DIR, load_json
 from scenarios.contract_review.service import ContractReviewService
 from scenarios.compliance_review.service import ComplianceReviewService
 from scenarios.intelligent_qa.service import IntelligentQaService
+from scenarios.procurement_file_review.service import ProcurementFileReviewService
 
 
 class ScenarioRegistry:
@@ -26,6 +27,7 @@ class ScenarioRuntime:
             "intelligent_qa": IntelligentQaService(registry.get("intelligent_qa")),
             "contract_review": ContractReviewService(registry.get("contract_review")),
             "compliance_review": ComplianceReviewService(registry.get("compliance_review")),
+            "procurement_file_review": ProcurementFileReviewService(registry.get("procurement_file_review")),
         }
 
     def execute(self, payload):

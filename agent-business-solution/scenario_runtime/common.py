@@ -3,6 +3,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+import sys
 from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -11,6 +12,18 @@ SCENARIOS_DIR = ROOT / "scenarios"
 EXECUTION_LOG = ROOT / "data" / "executions.log"
 UPSTREAM_TIMEOUT_SECONDS = 2
 UPSTREAM_MAX_ATTEMPTS = 2
+
+ENGINE_ROOT = ROOT.parent / "atomic-ai-engine"
+if str(ENGINE_ROOT) not in sys.path:
+    sys.path.insert(0, str(ENGINE_ROOT))
+
+from atomic_ai_engine import CapabilityEngine
+from atomic_ai_engine.errors import CapabilityError
+
+
+def get_capability_engine():
+    return CapabilityEngine.from_config()
+
 
 
 def load_json(path):
