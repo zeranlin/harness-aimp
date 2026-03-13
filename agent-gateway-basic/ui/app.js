@@ -49,6 +49,24 @@ function table(headers, rows) {
   `;
 }
 
+function filterBar(options = {}) {
+  const {
+    searchId = "search",
+    searchPlaceholder = "搜索",
+    statusId = "status-filter",
+    statuses = [],
+  } = options;
+  return `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;">
+      <input id="${searchId}" placeholder="${searchPlaceholder}" style="max-width:320px;" />
+      <select id="${statusId}" style="max-width:220px;">
+        <option value="">全部状态</option>
+        ${statuses.map((item) => `<option value="${item}">${item}</option>`).join("")}
+      </select>
+    </div>
+  `;
+}
+
 function pretty(payload) {
   return JSON.stringify(payload, null, 2);
 }
@@ -63,6 +81,9 @@ async function renderDashboard() {
   const [overview, layers] = await Promise.all([getJson("/ops/overview"), getJson("/ops/layers")]);
   const services = overview.metrics?.services || [];
   const audit = overview.audit_summary || {};
+  const matrixRows = (layers.items || []).map((item) =>
+    `<tr><td>${item.layer}</td><td>${item.project}</td><td>${item.status}</td><td>${item.health_mode}</td><td>${item.target}</td></tr>`
+  );
   return `
     <div class="toolbar"><h2>运营快照</h2><button id="refresh-dashboard">刷新</button></div>
     <div class="grid stats" style="margin-top:16px;">
@@ -72,6 +93,7 @@ async function renderDashboard() {
       ${card("拒绝请求", audit.deny || 0)}
     </div>
     <div class="grid cards" style="margin-top:16px;">${renderLayerCards(layers.items)}</div>
+    <div style="margin-top:16px;">${table(["层级", "项目", "状态", "检查方式", "聚合目标"], matrixRows)}</div>
   `;
 }
 
@@ -134,6 +156,7 @@ async function renderScenarios() {
       ${card("依赖总数", items.reduce((sum, item) => sum + (item.dependencies || []).length, 0))}
       ${card("编排类型", [...new Set(items.map((item) => item.orchestrator_type))].length)}
     </div>
+    ${filterBar({ searchId: "scenario-search", searchPlaceholder: "搜索场景编码或名称", statusId: "scenario-status", statuses: [...new Set(items.map((item) => item.status))] })}
     <div style="margin-top:16px;">${table(["场景编码", "名称", "状态", "编排类型", "依赖服务"], rows)}</div>
   `;
 }
@@ -156,6 +179,7 @@ async function renderCapabilities() {
       ${card("拒绝量", stats.rejected_count || 0)}
       ${card("错误种类", Object.keys(stats.error_codes || {}).length)}
     </div>
+    ${filterBar({ searchId: "capability-search", searchPlaceholder: "搜索能力编码或名称", statusId: "capability-status", statuses: [...new Set(items.map((item) => item.status))] })}
     <div style="margin-top:16px;">${table(["能力编码", "名称", "状态", "输入", "输出"], rows)}</div>
     <div style="margin-top:16px;">${table(["错误码", "次数"], errorRows)}</div>
   `;
@@ -194,6 +218,7 @@ async function renderKnowledge() {
       ${card("可信资产", payload.quality?.trusted_assets ?? 0)}
       ${card("问题数", payload.quality?.issues ?? 0)}
     </div>
+    ${filterBar({ searchId: "knowledge-search", searchPlaceholder: "搜索知识库名称", statusId: "knowledge-status", statuses: [...new Set((payload.knowledge_bases || []).map((item) => item.status))] })}
     <div style="margin-top:16px;">${table(["知识库", "状态", "文档数"], rows)}</div>
     <div style="margin-top:16px;">${table(["流水线", "状态"], pipelineRows)}</div>
   `;
@@ -215,6 +240,7 @@ async function renderModels() {
       ${card("日预算", payload.cost_baseline?.daily_budget ?? 0)}
       ${card("币种", payload.cost_baseline?.currency ?? "-")}
     </div>
+    ${filterBar({ searchId: "model-search", searchPlaceholder: "搜索模型名称", statusId: "model-status", statuses: [...new Set((payload.models || []).map((item) => item.status))] })}
     <div style="margin-top:16px;">${table(["模型", "类型", "状态"], rows)}</div>
     <div style="margin-top:16px;">${table(["基准", "胜出模型"], evalRows)}</div>
   `;
@@ -238,6 +264,30 @@ async function renderPlatform() {
     </div>
     <div style="margin-top:16px;">${table(["项目项", "状态"], rows)}</div>
   `;
+}
+
+function rowText(row) {
+  return row.textContent.toLowerCase();
+}
+
+function applyTableFilters(searchId, statusId, tableIndex, statusColumnIndex) {
+  const searchNode = document.getElementById(searchId);
+  const statusNode = document.getElementById(statusId);
+  const tables = document.querySelectorAll(".table-wrap table");
+  const tableNode = tables[tableIndex];
+  if (!searchNode || !statusNode || !tableNode) return;
+  const update = () => {
+    const searchValue = searchNode.value.trim().toLowerCase();
+    const statusValue = statusNode.value.trim().toLowerCase();
+    tableNode.querySelectorAll("tbody tr").forEach((row) => {
+      const cells = row.querySelectorAll("td");
+      const textMatch = !searchValue || rowText(row).includes(searchValue);
+      const statusMatch = !statusValue || (cells[statusColumnIndex] && cells[statusColumnIndex].textContent.toLowerCase().includes(statusValue));
+      row.style.display = textMatch && statusMatch ? "" : "none";
+    });
+  };
+  searchNode.addEventListener("input", update);
+  statusNode.addEventListener("change", update);
 }
 
 async function renderRoute(route) {
@@ -308,6 +358,10 @@ function bindInteractions() {
     const node = document.getElementById(id);
     if (node) node.addEventListener("click", () => navigate(path));
   });
+  applyTableFilters("scenario-search", "scenario-status", 0, 2);
+  applyTableFilters("capability-search", "capability-status", 0, 2);
+  applyTableFilters("knowledge-search", "knowledge-status", 0, 1);
+  applyTableFilters("model-search", "model-status", 0, 2);
 }
 
 async function render() {
