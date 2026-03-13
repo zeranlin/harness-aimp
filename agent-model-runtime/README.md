@@ -26,6 +26,7 @@ API:
 - `GET /ops/circuits`
 
 当前已具备的运行时能力：
+- 优先消费 L6 `agent-model-hub` 的路由建议
 - 基于 `task_type` 的模型路由
 - 简单并发控制
 - 有限重试

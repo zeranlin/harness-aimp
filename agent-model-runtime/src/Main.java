@@ -7,7 +7,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayDeque;
@@ -220,8 +222,39 @@ public class Main {
 
         void registerRoute(RoutePolicy route) {
             routes.put(route.taskType, route);
-            circuits.put(route.primaryModelRoute, new CircuitState(route.primaryModelRoute));
-            circuits.put(route.fallbackModelRoute, new CircuitState(route.fallbackModelRoute));
+            ensureCircuit(route.primaryModelRoute);
+            ensureCircuit(route.fallbackModelRoute);
+        }
+
+        void ensureCircuit(String modelRoute) {
+            if (modelRoute == null || modelRoute.isEmpty()) {
+                return;
+            }
+            circuits.putIfAbsent(modelRoute, new CircuitState(modelRoute));
+        }
+
+        RouteDecision resolveRoute(RoutePolicy route) {
+            RouteDecision decision = fetchRecommendedRoute(route.taskType);
+            if (decision != null) {
+                ensureCircuit(decision.preferredModelRoute);
+                ensureCircuit(decision.fallbackModelRoute);
+                return decision;
+            }
+            return new RouteDecision(route.taskType, route.primaryModelRoute, route.fallbackModelRoute, "local");
+        }
+
+        RouteDecision fetchRecommendedRoute(String taskType) {
+            try {
+                String payload = fetchText("http://127.0.0.1:8005/routes/recommendations/" + taskType);
+                String preferred = extractJsonString(payload, "preferred_model");
+                String fallback = extractJsonString(payload, "fallback_model");
+                if (preferred.isEmpty()) {
+                    return null;
+                }
+                return new RouteDecision(taskType, preferred, fallback.isEmpty() ? preferred : fallback, "l6");
+            } catch (Exception ignored) {
+                return null;
+            }
         }
 
         RuntimeResponse invoke(RuntimeRequest request, int payloadSize) {
@@ -347,8 +380,9 @@ public class Main {
             inflight.incrementAndGet();
             long queueWaitMs = System.currentTimeMillis() - queueStart;
             try {
-                CircuitState primaryCircuit = circuits.get(route.primaryModelRoute);
-                String selectedModelRoute = chooseModelRoute(route, primaryCircuit);
+                RouteDecision routeDecision = resolveRoute(route);
+                CircuitState primaryCircuit = circuits.get(routeDecision.preferredModelRoute);
+                String selectedModelRoute = chooseModelRoute(routeDecision, primaryCircuit);
                 int attempts = 0;
                 long startedAt = System.currentTimeMillis();
                 String lastErrorCode = "";
@@ -379,7 +413,7 @@ public class Main {
                     }
                 }
                 circuits.get(selectedModelRoute).recordFailure();
-                String fallbackRoute = route.fallbackModelRoute;
+                String fallbackRoute = routeDecision.fallbackModelRoute;
                 if (!fallbackRoute.equals(selectedModelRoute) && circuits.containsKey(fallbackRoute) && circuits.get(fallbackRoute).isAvailable()) {
                     try {
                         Future<ModelExecutionResult> future = workers.submit(new ModelCall(request, fallbackRoute, 1));
@@ -407,9 +441,9 @@ public class Main {
             }
         }
 
-        private String chooseModelRoute(RoutePolicy route, CircuitState primaryCircuit) {
+        private String chooseModelRoute(RouteDecision route, CircuitState primaryCircuit) {
             if (primaryCircuit != null && primaryCircuit.isAvailable()) {
-                return route.primaryModelRoute;
+                return route.preferredModelRoute;
             }
             return route.fallbackModelRoute;
         }
@@ -419,7 +453,8 @@ public class Main {
             if (countMetrics) {
                 errorCalls.incrementAndGet();
             }
-            String selectedRoute = chooseModelRoute(route, circuits.get(route.primaryModelRoute));
+            RouteDecision routeDecision = resolveRoute(route);
+            String selectedRoute = chooseModelRoute(routeDecision, circuits.get(routeDecision.preferredModelRoute));
             long durationMs = Math.max(1, System.currentTimeMillis() - job.createdAtMs);
             job.markFinished("error", selectedRoute, attempts, durationMs, false, errorCode, queueWaitMs);
             replaceRecentJob(job);
@@ -434,13 +469,15 @@ public class Main {
                 if ("default".equals(route.taskType)) {
                     continue;
                 }
-                CircuitState circuit = circuits.get(route.primaryModelRoute);
+                RouteDecision decision = resolveRoute(route);
+                CircuitState circuit = circuits.get(decision.preferredModelRoute);
                 routeItems.add(mapOf(
                         "task_type", route.taskType,
                         "queue_name", route.queueName,
-                        "model_route", chooseModelRoute(route, circuit),
-                        "primary_model_route", route.primaryModelRoute,
-                        "fallback_model_route", route.fallbackModelRoute,
+                        "model_route", chooseModelRoute(decision, circuit),
+                        "primary_model_route", decision.preferredModelRoute,
+                        "fallback_model_route", decision.fallbackModelRoute,
+                        "route_source", decision.source,
                         "timeout_ms", route.timeoutMs,
                         "max_attempts", route.maxAttempts,
                         "priority", route.priority
@@ -476,14 +513,16 @@ public class Main {
         String snapshotRoutes() {
             List<Map<String, Object>> items = new ArrayList<Map<String, Object>>();
             for (RoutePolicy route : routes.values()) {
+                RouteDecision decision = resolveRoute(route);
                 items.add(mapOf(
                         "task_type", route.taskType,
                         "queue_name", route.queueName,
                         "priority", route.priority,
                         "timeout_ms", route.timeoutMs,
                         "max_attempts", route.maxAttempts,
-                        "primary_model_route", route.primaryModelRoute,
-                        "fallback_model_route", route.fallbackModelRoute
+                        "primary_model_route", decision.preferredModelRoute,
+                        "fallback_model_route", decision.fallbackModelRoute,
+                        "route_source", decision.source
                 ));
             }
             return jsonObject(mapOf(
@@ -559,6 +598,20 @@ public class Main {
                     recentJobs.removeLast();
                 }
             }
+        }
+    }
+
+    static class RouteDecision {
+        final String taskType;
+        final String preferredModelRoute;
+        final String fallbackModelRoute;
+        final String source;
+
+        RouteDecision(String taskType, String preferredModelRoute, String fallbackModelRoute, String source) {
+            this.taskType = taskType;
+            this.preferredModelRoute = preferredModelRoute;
+            this.fallbackModelRoute = fallbackModelRoute;
+            this.source = source;
         }
     }
 
@@ -983,6 +1036,16 @@ public class Main {
         exchange.sendResponseHeaders(statusCode, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
+        }
+    }
+
+    static String fetchText(String url) throws IOException {
+        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+        connection.setRequestMethod("GET");
+        connection.setConnectTimeout(1500);
+        connection.setReadTimeout(1500);
+        try (InputStream input = connection.getInputStream()) {
+            return readBody(input);
         }
     }
 
