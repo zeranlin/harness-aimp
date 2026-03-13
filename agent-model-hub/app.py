@@ -252,10 +252,44 @@ class ModelHubStore:
         return [item for item in self.evaluations if item["model_id"] == model_id]
 
     def get_route_recommendations(self):
-        return list(self.route_recommendations.values())
+        return [self.enrich_route_recommendation(item) for item in self.route_recommendations.values()]
 
     def get_route_recommendation(self, task_type):
-        return self.route_recommendations.get(task_type)
+        item = self.route_recommendations.get(task_type)
+        return self.enrich_route_recommendation(item) if item else None
+
+    def enrich_route_recommendation(self, item):
+        if not item:
+            return None
+        enriched = dict(item)
+        preferred = self.resolve_model_descriptor(item.get("preferred_model"))
+        fallback = self.resolve_model_descriptor(item.get("fallback_model"))
+        if preferred:
+            enriched.update({
+                "preferred_model_id": preferred.get("model_id"),
+                "preferred_endpoint": preferred.get("endpoint", ""),
+                "preferred_auth_env": preferred.get("auth_env", ""),
+                "preferred_provider": preferred.get("provider", ""),
+                "preferred_version": preferred.get("current_version", ""),
+            })
+        if fallback:
+            enriched.update({
+                "fallback_model_id": fallback.get("model_id"),
+                "fallback_endpoint": fallback.get("endpoint", ""),
+                "fallback_auth_env": fallback.get("auth_env", ""),
+                "fallback_provider": fallback.get("provider", ""),
+                "fallback_version": fallback.get("current_version", ""),
+            })
+        return enriched
+
+    def resolve_model_descriptor(self, route_value):
+        if not route_value:
+            return None
+        name = route_value.split(":", 1)[0]
+        for item in self.models.values():
+            if item.get("name") == name:
+                return item
+        return None
 
     def get_cost_baseline(self):
         return self.cost_baseline

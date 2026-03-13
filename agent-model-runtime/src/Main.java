@@ -61,20 +61,24 @@ public class Main {
 
     static void selfTest() {
         RuntimeState state = new RuntimeState();
-        RuntimeRequest request = RuntimeRequest.fromBody("{\"request_id\":\"req-self\",\"task_type\":\"pricing_inference\",\"input\":{\"payload\":\"price analysis\"}}");
-        RuntimeResponse response = state.invoke(request, request.rawBody.length());
-        if (!"ok".equals(response.status)) {
-            throw new IllegalStateException("invoke should succeed");
-        }
-        if (!"pricing_inference".equals(response.taskType)) {
-            throw new IllegalStateException("task type should be preserved");
-        }
-        AsyncSubmission asyncSubmission = state.submitAsync(request, request.rawBody.length());
-        if (asyncSubmission.jobId == null || asyncSubmission.jobId.isEmpty()) {
-            throw new IllegalStateException("async job id should exist");
-        }
-        if (!state.snapshotOverview().contains("queue_depth")) {
-            throw new IllegalStateException("overview should contain queue metrics");
+        try {
+            RuntimeRequest request = RuntimeRequest.fromBody("{\"request_id\":\"req-self\",\"task_type\":\"pricing_inference\",\"input\":{\"payload\":\"price analysis\"}}");
+            RuntimeResponse response = state.invoke(request, request.rawBody.length());
+            if (!"ok".equals(response.status)) {
+                throw new IllegalStateException("invoke should succeed");
+            }
+            if (!"pricing_inference".equals(response.taskType)) {
+                throw new IllegalStateException("task type should be preserved");
+            }
+            AsyncSubmission asyncSubmission = state.submitAsync(request, request.rawBody.length());
+            if (asyncSubmission.jobId == null || asyncSubmission.jobId.isEmpty()) {
+                throw new IllegalStateException("async job id should exist");
+            }
+            if (!state.snapshotOverview().contains("queue_depth")) {
+                throw new IllegalStateException("overview should contain queue metrics");
+            }
+        } finally {
+            state.shutdown();
         }
     }
 
@@ -240,7 +244,7 @@ public class Main {
                 ensureCircuit(decision.fallbackModelRoute);
                 return decision;
             }
-            return new RouteDecision(route.taskType, route.primaryModelRoute, route.fallbackModelRoute, "local");
+            return new RouteDecision(route.taskType, route.primaryModelRoute, route.fallbackModelRoute, "local", "", "", "");
         }
 
         RouteDecision fetchRecommendedRoute(String taskType) {
@@ -251,7 +255,10 @@ public class Main {
                 if (preferred.isEmpty()) {
                     return null;
                 }
-                return new RouteDecision(taskType, preferred, fallback.isEmpty() ? preferred : fallback, "l6");
+                String preferredEndpoint = extractJsonString(payload, "preferred_endpoint");
+                String preferredAuthEnv = extractJsonString(payload, "preferred_auth_env");
+                String preferredProvider = extractJsonString(payload, "preferred_provider");
+                return new RouteDecision(taskType, preferred, fallback.isEmpty() ? preferred : fallback, "l6", preferredEndpoint, preferredAuthEnv, preferredProvider);
             } catch (Exception ignored) {
                 return null;
             }
@@ -389,9 +396,10 @@ public class Main {
                 String lastErrorMessage = "";
                 for (int attempt = 1; attempt <= route.maxAttempts; attempt++) {
                     attempts = attempt;
-                    Future<ModelExecutionResult> future = workers.submit(new ModelCall(request, selectedModelRoute, attempt));
+                    Future<ModelExecutionResult> future = workers.submit(new ModelCall(request, routeDecision, selectedModelRoute, attempt));
                     try {
-                        ModelExecutionResult modelResult = future.get(request.timeoutMs > 0 ? request.timeoutMs : route.timeoutMs, TimeUnit.MILLISECONDS);
+                        long effectiveTimeoutMs = determineEffectiveTimeoutMs(request, route, routeDecision, selectedModelRoute);
+                        ModelExecutionResult modelResult = future.get(effectiveTimeoutMs, TimeUnit.MILLISECONDS);
                         RuntimeResponse response = RuntimeResponse.success(request, job.jobId, route.queueName, selectedModelRoute, attempts,
                                 System.currentTimeMillis() - startedAt, payloadSize, queueWaitMs, modelResult.result);
                         job.markFinished("success", selectedModelRoute, attempts, response.durationMs, false, "", queueWaitMs);
@@ -416,8 +424,9 @@ public class Main {
                 String fallbackRoute = routeDecision.fallbackModelRoute;
                 if (!fallbackRoute.equals(selectedModelRoute) && circuits.containsKey(fallbackRoute) && circuits.get(fallbackRoute).isAvailable()) {
                     try {
-                        Future<ModelExecutionResult> future = workers.submit(new ModelCall(request, fallbackRoute, 1));
-                        ModelExecutionResult modelResult = future.get(route.timeoutMs, TimeUnit.MILLISECONDS);
+                        Future<ModelExecutionResult> future = workers.submit(new ModelCall(request, routeDecision, fallbackRoute, 1));
+                        long fallbackTimeoutMs = determineEffectiveTimeoutMs(request, route, routeDecision, fallbackRoute);
+                        ModelExecutionResult modelResult = future.get(fallbackTimeoutMs, TimeUnit.MILLISECONDS);
                         RuntimeResponse response = RuntimeResponse.success(request, job.jobId, route.queueName, fallbackRoute, 1,
                                 System.currentTimeMillis() - startedAt, payloadSize, queueWaitMs, modelResult.result);
                         job.markFinished("success", fallbackRoute, 1, response.durationMs, false, "fallback", queueWaitMs);
@@ -446,6 +455,19 @@ public class Main {
                 return route.preferredModelRoute;
             }
             return route.fallbackModelRoute;
+        }
+
+        private long determineEffectiveTimeoutMs(RuntimeRequest request, RoutePolicy route, RouteDecision decision, String modelRoute) {
+            long baseTimeoutMs = request.timeoutMs > 0 ? request.timeoutMs : route.timeoutMs;
+            boolean isRemotePreferredRoute = decision != null
+                    && "l6".equals(decision.source)
+                    && modelRoute.equals(decision.preferredModelRoute)
+                    && decision.preferredEndpoint != null
+                    && !decision.preferredEndpoint.isEmpty();
+            if (isRemotePreferredRoute) {
+                return Math.max(baseTimeoutMs, 8000L);
+            }
+            return baseTimeoutMs;
         }
 
         private RuntimeResponse failResponse(RuntimeRequest request, RoutePolicy route, JobRecord job, int payloadSize, int httpStatus,
@@ -599,6 +621,11 @@ public class Main {
                 }
             }
         }
+
+        void shutdown() {
+            asyncCoordinator.shutdownNow();
+            workers.shutdownNow();
+        }
     }
 
     static class RouteDecision {
@@ -606,22 +633,31 @@ public class Main {
         final String preferredModelRoute;
         final String fallbackModelRoute;
         final String source;
+        final String preferredEndpoint;
+        final String preferredAuthEnv;
+        final String preferredProvider;
 
-        RouteDecision(String taskType, String preferredModelRoute, String fallbackModelRoute, String source) {
+        RouteDecision(String taskType, String preferredModelRoute, String fallbackModelRoute, String source,
+                      String preferredEndpoint, String preferredAuthEnv, String preferredProvider) {
             this.taskType = taskType;
             this.preferredModelRoute = preferredModelRoute;
             this.fallbackModelRoute = fallbackModelRoute;
             this.source = source;
+            this.preferredEndpoint = preferredEndpoint;
+            this.preferredAuthEnv = preferredAuthEnv;
+            this.preferredProvider = preferredProvider;
         }
     }
 
     static class ModelCall implements Callable<ModelExecutionResult> {
         final RuntimeRequest request;
+        final RouteDecision routeDecision;
         final String modelRoute;
         final int attempt;
 
-        ModelCall(RuntimeRequest request, String modelRoute, int attempt) {
+        ModelCall(RuntimeRequest request, RouteDecision routeDecision, String modelRoute, int attempt) {
             this.request = request;
+            this.routeDecision = routeDecision;
             this.modelRoute = modelRoute;
             this.attempt = attempt;
         }
@@ -631,6 +667,12 @@ public class Main {
             String lowered = request.rawBody.toLowerCase(Locale.ROOT);
             if (lowered.contains("force_fail")) {
                 throw new IOException("forced model failure");
+            }
+            if (routeDecision != null && "l6".equals(routeDecision.source)
+                    && modelRoute.equals(routeDecision.preferredModelRoute)
+                    && routeDecision.preferredEndpoint != null
+                    && !routeDecision.preferredEndpoint.isEmpty()) {
+                return new ModelExecutionResult(callRemoteModel(request, routeDecision, modelRoute));
             }
             if (lowered.contains("simulate_timeout") || lowered.contains("slow")) {
                 Thread.sleep(Math.max(request.timeoutMs + 200L, 400L));
@@ -644,10 +686,59 @@ public class Main {
                     "risk_level", inferRiskLevel(request.rawBody),
                     "attempt", attempt,
                     "model_route", modelRoute,
+                    "execution_mode", "local-fallback",
                     "output_tokens_estimate", Math.max(24, request.rawBody.length() / 3)
             );
             return new ModelExecutionResult(result);
         }
+    }
+
+    static Map<String, Object> callRemoteModel(RuntimeRequest request, RouteDecision routeDecision, String modelRoute) throws Exception {
+        String endpoint = routeDecision.preferredEndpoint;
+        String token = routeDecision.preferredAuthEnv == null || routeDecision.preferredAuthEnv.isEmpty()
+                ? ""
+                : System.getenv(routeDecision.preferredAuthEnv);
+        String modelName = modelRoute.contains(":") ? modelRoute.substring(modelRoute.indexOf(':') + 1) : modelRoute;
+        String prompt = "Task type: " + request.taskType + "\nPayload: " + request.rawBody + "\nRespond with a short execution summary.";
+        String body = jsonObject(mapOf(
+                "model", modelName,
+                "messages", rawJson(jsonArray(Arrays.asList(
+                        mapOf("role", "system", "content", "You are a precise runtime model responder."),
+                        mapOf("role", "user", "content", prompt)
+                ))),
+                "temperature", 0,
+                "max_tokens", 128
+        ));
+        HttpURLConnection connection = (HttpURLConnection) new URL(endpoint + "/chat/completions").openConnection();
+        connection.setRequestMethod("POST");
+        connection.setConnectTimeout(4000);
+        connection.setReadTimeout(Math.max(request.timeoutMs, 8000));
+        connection.setDoOutput(true);
+        connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+        if (token != null && !token.isEmpty()) {
+            connection.setRequestProperty("Authorization", "Bearer " + token);
+        }
+        try (OutputStream output = connection.getOutputStream()) {
+            output.write(body.getBytes(StandardCharsets.UTF_8));
+        }
+        InputStream input = connection.getResponseCode() >= 400 ? connection.getErrorStream() : connection.getInputStream();
+        String response = readBody(input);
+        String content = extractJsonString(response, "content");
+        String reasoning = extractJsonString(response, "reasoning");
+        String text = extractJsonString(response, "text");
+        String summary = !content.isEmpty() ? content : !reasoning.isEmpty() ? reasoning : !text.isEmpty() ? text : "remote model call completed";
+        summary = summary.replace("\n", " ").trim();
+        return mapOf(
+                "summary", summary,
+                "task_type", request.taskType,
+                "risk_level", inferRiskLevel(request.rawBody),
+                "attempt", 1,
+                "model_route", modelRoute,
+                "execution_mode", "remote-l6",
+                "provider", routeDecision.preferredProvider,
+                "endpoint", endpoint,
+                "output_tokens_estimate", Math.max(24, summary.length() / 2)
+        );
     }
 
     static String buildSummary(String taskType, String rawBody) {
