@@ -29,6 +29,7 @@ def run():
     assert summary["total"] == 4
     assert summary["scenarios"]["compliance_review"]["error"] == 1
     assert summary["error_codes"]["UPSTREAM_L3_UNAVAILABLE"] == 1
+    assert summary["scenarios"]["procurement_file_review"]["success"] == 1
     print("scenario-tests ok")
 
 

@@ -1,7 +1,7 @@
-from scenario_runtime.common import ScenarioService
+from scenario_runtime.common import HttpBackedScenarioService
 
 
-class IntelligentQaService(ScenarioService):
+class IntelligentQaService(HttpBackedScenarioService):
     scenario_code = "intelligent_qa"
     required_field = "input.question"
     l3_capability_code = "intent_retrieval"

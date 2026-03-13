@@ -143,18 +143,12 @@ def record_execution(request_id, scenario_code, status, duration_ms, dependency_
 class ScenarioService:
     scenario_code = ""
     required_field = ""
-    l3_capability_code = "structured_extraction"
-    l4_task_type = ""
-    request_field = ""
 
     def __init__(self, manifest):
         self.manifest = manifest
 
     def extract_input(self, request_payload):
         return ""
-
-    def build_success_result(self, source_text, capability_call, model_call):
-        raise NotImplementedError
 
     def error_response(self, request_id, code, message, started_at, dependency_calls=None):
         duration_ms = int((time.time() - started_at) * 1000)
@@ -170,17 +164,21 @@ class ScenarioService:
             "errors": errors,
         }
 
+
+class HttpBackedScenarioService(ScenarioService):
+    l3_capability_code = "structured_extraction"
+    l4_task_type = ""
+    request_field = ""
+
+    def build_success_result(self, source_text, capability_call, model_call):
+        raise NotImplementedError
+
     def execute(self, request_payload):
         started_at = time.time()
         request_id = request_payload.get("request_id") or f"req-{uuid4().hex[:12]}"
         source_text = self.extract_input(request_payload)
         if not source_text:
-            return 400, self.error_response(
-                request_id,
-                "INVALID_INPUT",
-                f"{self.required_field} is required",
-                started_at,
-            )
+            return 400, self.error_response(request_id, "INVALID_INPUT", f"{self.required_field} is required", started_at)
 
         capability_call = call_dependency(
             "atomic-ai-engine",
@@ -195,17 +193,7 @@ class ScenarioService:
             "UPSTREAM_L3_UNAVAILABLE",
         )
         if not capability_call["ok"]:
-            return 502, self.error_response(
-                request_id,
-                capability_call["error_code"] or "UPSTREAM_L3_ERROR",
-                capability_call["payload"].get("message", "atomic-ai-engine failed"),
-                started_at,
-                [{
-                    "service": capability_call["service"],
-                    "status_code": capability_call["status_code"],
-                    "attempts": capability_call["attempts"],
-                }],
-            )
+            return 502, self.error_response(request_id, capability_call["error_code"] or "UPSTREAM_L3_ERROR", capability_call["payload"].get("message", "atomic-ai-engine failed"), started_at, [{"service": capability_call["service"], "status_code": capability_call["status_code"], "attempts": capability_call["attempts"]}])
 
         model_call = call_dependency(
             "agent-model-runtime",
@@ -220,24 +208,7 @@ class ScenarioService:
             "UPSTREAM_L4_UNAVAILABLE",
         )
         if not model_call["ok"]:
-            return 502, self.error_response(
-                request_id,
-                model_call["error_code"] or "UPSTREAM_L4_ERROR",
-                model_call["payload"].get("message", "agent-model-runtime failed"),
-                started_at,
-                [
-                    {
-                        "service": capability_call["service"],
-                        "status_code": capability_call["status_code"],
-                        "attempts": capability_call["attempts"],
-                    },
-                    {
-                        "service": model_call["service"],
-                        "status_code": model_call["status_code"],
-                        "attempts": model_call["attempts"],
-                    },
-                ],
-            )
+            return 502, self.error_response(request_id, model_call["error_code"] or "UPSTREAM_L4_ERROR", model_call["payload"].get("message", "agent-model-runtime failed"), started_at, [{"service": capability_call["service"], "status_code": capability_call["status_code"], "attempts": capability_call["attempts"]}, {"service": model_call["service"], "status_code": model_call["status_code"], "attempts": model_call["attempts"]}])
 
         duration_ms = int((time.time() - started_at) * 1000)
         response = {
@@ -245,25 +216,46 @@ class ScenarioService:
             "scenario_code": self.scenario_code,
             "status": "success",
             "result": self.build_success_result(source_text, capability_call, model_call),
-            "evidence": [
-                {
-                    "type": "capability_output",
-                    "source": "atomic-ai-engine",
-                    "snippet": f"已识别 {capability_call['payload'].get('evidence_count', 0)} 条候选证据。",
-                }
-            ],
+            "evidence": [{"type": "capability_output", "source": "atomic-ai-engine", "snippet": f"已识别 {capability_call['payload'].get('evidence_count', 0)} 条候选证据。"}],
             "metrics": {"duration_ms": duration_ms},
             "errors": [],
         }
-        record_execution(
-            request_id,
-            self.scenario_code,
-            "success",
-            duration_ms,
-            [
-                {"service": capability_call["service"], "status_code": capability_call["status_code"], "attempts": capability_call["attempts"]},
-                {"service": model_call["service"], "status_code": model_call["status_code"], "attempts": model_call["attempts"]},
-            ],
-            [],
-        )
+        record_execution(request_id, self.scenario_code, "success", duration_ms, [{"service": capability_call["service"], "status_code": capability_call["status_code"], "attempts": capability_call["attempts"]}, {"service": model_call["service"], "status_code": model_call["status_code"], "attempts": model_call["attempts"]}], [])
         return 200, response
+
+
+class SdkBackedScenarioService(ScenarioService):
+    l3_capability_code = "structured_extraction"
+
+    def __init__(self, manifest):
+        super().__init__(manifest)
+        self.engine = get_capability_engine()
+
+    def build_success_result(self, source_text, capability_response):
+        raise NotImplementedError
+
+    def execute(self, request_payload):
+        started_at = time.time()
+        request_id = request_payload.get("request_id") or f"req-{uuid4().hex[:12]}"
+        source_text = self.extract_input(request_payload)
+        if not source_text:
+            return 400, self.error_response(request_id, "INVALID_INPUT", f"{self.required_field} is required", started_at)
+
+        try:
+            capability_response = self.engine.invoke(self.l3_capability_code, {"document": source_text}, request_id=f"{request_id}-{self.l3_capability_code}")
+            result = self.build_success_result(source_text, capability_response)
+            duration_ms = int((time.time() - started_at) * 1000)
+            evidence = capability_response.get("evidence", [])
+            response = {
+                "request_id": request_id,
+                "scenario_code": self.scenario_code,
+                "status": "success",
+                "result": result,
+                "evidence": evidence,
+                "metrics": {"duration_ms": duration_ms},
+                "errors": [],
+            }
+            record_execution(request_id, self.scenario_code, "success", duration_ms, [{"service": "atomic-ai-engine", "capability_code": self.l3_capability_code, "status": "success", "sdk_mode": True}], [])
+            return 200, response
+        except CapabilityError as exc:
+            return 502, self.error_response(request_id, exc.code, exc.message, started_at, [{"service": "atomic-ai-engine", "capability_code": self.l3_capability_code, "status": "error", "sdk_mode": True}])
