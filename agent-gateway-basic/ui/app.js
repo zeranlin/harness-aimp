@@ -10,6 +10,8 @@ const routes = [
   { path: "/console/debug", label: "调试台", title: "调试工作台", description: "构造请求、查看契约转换、Trace 与 Replay。" },
 ];
 
+let viewDetails = null;
+
 async function getJson(url, options = {}) {
   const response = await fetch(url, options);
   const text = await response.text();
@@ -20,13 +22,40 @@ async function getJson(url, options = {}) {
   }
 }
 
-function navigate(path) {
-  window.history.pushState({}, "", path);
+function currentUrl() {
+  return new URL(window.location.href);
+}
+
+function currentPath() {
+  return window.location.pathname === "/console" ? "/console/dashboard" : window.location.pathname;
+}
+
+function navigate(path, options = {}) {
+  const url = currentUrl();
+  url.pathname = path;
+  if (!options.keepQuery) {
+    url.search = "";
+  }
+  window.history.pushState({}, "", url.toString());
   render();
 }
 
+function updateSearchParam(key, value) {
+  const url = currentUrl();
+  if (value) {
+    url.searchParams.set(key, value);
+  } else {
+    url.searchParams.delete(key);
+  }
+  window.history.replaceState({}, "", url.toString());
+}
+
+function readSearchParam(key) {
+  return currentUrl().searchParams.get(key) || "";
+}
+
 function navLink(route) {
-  const active = window.location.pathname === route.path || (window.location.pathname === "/console" && route.path === "/console/dashboard");
+  const active = currentPath() === route.path;
   return `<a href="${route.path}" data-path="${route.path}" class="${active ? "active" : ""}">${route.label}</a>`;
 }
 
@@ -38,9 +67,10 @@ function sectionCard(title, body, tone = "") {
   return `<div class="card ${tone}"><div class="label">${title}</div><div style="margin-top:8px;color:var(--muted);line-height:1.55;">${body}</div></div>`;
 }
 
-function table(headers, rows) {
+function table(headers, rows, options = {}) {
+  const tableId = options.tableId ? ` data-table-id="${options.tableId}"` : "";
   return `
-    <div class="table-wrap">
+    <div class="table-wrap"${tableId}>
       <table>
         <thead><tr>${headers.map((item) => `<th>${item}</th>`).join("")}</tr></thead>
         <tbody>${rows.join("") || `<tr><td colspan="${headers.length}">暂无数据</td></tr>`}</tbody>
@@ -58,10 +88,10 @@ function filterBar(options = {}) {
   } = options;
   return `
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;">
-      <input id="${searchId}" placeholder="${searchPlaceholder}" style="max-width:320px;" />
+      <input id="${searchId}" placeholder="${searchPlaceholder}" style="max-width:320px;" value="${readSearchParam(searchId)}" />
       <select id="${statusId}" style="max-width:220px;">
         <option value="">全部状态</option>
-        ${statuses.map((item) => `<option value="${item}">${item}</option>`).join("")}
+        ${statuses.map((item) => `<option value="${item}" ${readSearchParam(statusId) === item ? "selected" : ""}>${item}</option>`).join("")}
       </select>
     </div>
   `;
@@ -71,29 +101,82 @@ function pretty(payload) {
   return JSON.stringify(payload, null, 2);
 }
 
+function toAlertTone(statusText) {
+  const value = String(statusText || "").toLowerCase();
+  if (["up", "ok", "healthy", "normal", "active", "running"].some((item) => value.includes(item) || value.includes("正常") || value.includes("活动"))) {
+    return { tone: "good", label: "绿", text: "正常" };
+  }
+  if (["degraded", "warning", "partial", "testing", "draft"].some((item) => value.includes(item)) || value.includes("测试") || value.includes("草稿") || value.includes("降级")) {
+    return { tone: "warn", label: "黄", text: "关注" };
+  }
+  return { tone: "bad", label: "红", text: "异常" };
+}
+
+function alertBadge(statusText) {
+  const meta = toAlertTone(statusText);
+  return `<span class="badge ${meta.tone}">${meta.label} · ${meta.text}</span>`;
+}
+
+function detailButton(kind, index) {
+  return `<button class="secondary detail-trigger" data-detail-kind="${kind}" data-detail-index="${index}">查看详情</button>`;
+}
+
+function openDetail(kind, index) {
+  const datasets = window.__consoleDatasets || {};
+  const list = datasets[kind] || [];
+  const item = list[index];
+  if (!item) return;
+  viewDetails = { title: item.__detailTitle || item.name || item.project || item.layer || kind, payload: item };
+  const drawer = document.getElementById("detail-drawer");
+  const title = document.getElementById("detail-title");
+  const body = document.getElementById("detail-body");
+  if (!drawer || !title || !body) return;
+  title.textContent = viewDetails.title;
+  body.textContent = pretty(item);
+  drawer.classList.add("open");
+}
+
+function closeDetail() {
+  viewDetails = null;
+  const drawer = document.getElementById("detail-drawer");
+  if (drawer) drawer.classList.remove("open");
+}
+
 function renderLayerCards(items) {
-  return (items || []).map((item) =>
-    sectionCard(`${item.layer} · ${item.project}`, `${item.status} · ${item.health_mode}<br/>${item.target}`, item.healthy ? "good" : "bad")
-  ).join("");
+  return (items || []).map((item) => {
+    const meta = toAlertTone(item.status);
+    return sectionCard(`${item.layer} · ${item.project}`, `${alertBadge(item.status)}<br/>${item.health_mode}<br/>${item.target}`, meta.tone);
+  }).join("");
 }
 
 async function renderDashboard() {
   const [overview, layers] = await Promise.all([getJson("/ops/overview"), getJson("/ops/layers")]);
   const services = overview.metrics?.services || [];
   const audit = overview.audit_summary || {};
-  const matrixRows = (layers.items || []).map((item) =>
-    `<tr><td>${item.layer}</td><td>${item.project}</td><td>${item.status}</td><td>${item.health_mode}</td><td>${item.target}</td></tr>`
-  );
+  const matrixRows = (layers.items || []).map((item, index) => {
+    const meta = toAlertTone(item.status);
+    return `<tr><td>${item.layer}</td><td>${item.project}</td><td>${alertBadge(item.status)}</td><td>${item.health_mode}</td><td>${item.target}</td><td>${detailButton("layers", index)}</td></tr>`;
+  });
+  window.__consoleDatasets = { ...(window.__consoleDatasets || {}), layers: (layers.items || []).map((item) => ({ ...item, __detailTitle: `${item.layer} ${item.project}` })) };
+  const green = (layers.items || []).filter((item) => toAlertTone(item.status).tone === "good").length;
+  const yellow = (layers.items || []).filter((item) => toAlertTone(item.status).tone === "warn").length;
+  const red = (layers.items || []).filter((item) => toAlertTone(item.status).tone === "bad").length;
   return `
     <div class="toolbar"><h2>运营快照</h2><button id="refresh-dashboard">刷新</button></div>
     <div class="grid stats" style="margin-top:16px;">
       ${card("纳管服务", services.length)}
       ${card("审计总量", audit.total || 0)}
-      ${card("允许请求", audit.allow || 0)}
-      ${card("拒绝请求", audit.deny || 0)}
+      ${card("允许请求", audit.allow || 0, "good")}
+      ${card("拒绝请求", audit.deny || 0, audit.deny ? "bad" : "")}
+    </div>
+    <div class="grid stats" style="margin-top:16px;">
+      ${card("绿色状态", green, "good")}
+      ${card("黄色状态", yellow, yellow ? "warn" : "")}
+      ${card("红色状态", red, red ? "bad" : "")}
+      ${card("层级总数", (layers.items || []).length)}
     </div>
     <div class="grid cards" style="margin-top:16px;">${renderLayerCards(layers.items)}</div>
-    <div style="margin-top:16px;">${table(["层级", "项目", "状态", "检查方式", "聚合目标"], matrixRows)}</div>
+    <div style="margin-top:16px;">${table(["层级", "项目", "告警状态", "检查方式", "聚合目标", "明细"], matrixRows, { tableId: "dashboard-matrix" })}</div>
   `;
 }
 
@@ -101,18 +184,20 @@ async function renderGateway() {
   const overview = await getJson("/ops/overview");
   const services = overview.metrics?.services || [];
   const audit = overview.audit_summary || {};
-  const transformRows = (overview.contract_transformations?.items || []).map((item) =>
-    `<tr><td>${item.service}</td><td>${item.target}</td><td>${item.transform_count}</td></tr>`
+  const transforms = overview.contract_transformations?.items || [];
+  const transformRows = transforms.map((item, index) =>
+    `<tr><td>${item.service}</td><td>${item.target}</td><td>${item.transform_count}</td><td>${detailButton("transforms", index)}</td></tr>`
   );
+  window.__consoleDatasets = { ...(window.__consoleDatasets || {}), transforms: transforms.map((item) => ({ ...item, __detailTitle: `${item.service} 契约转换` })) };
   return `
     <div class="toolbar"><h2>网关运营</h2><button id="refresh-gateway">刷新</button></div>
     <div class="grid stats" style="margin-top:16px;">
       ${card("服务数", services.length)}
-      ${card("允许", audit.allow || 0)}
-      ${card("拒绝", audit.deny || 0)}
+      ${card("允许", audit.allow || 0, "good")}
+      ${card("拒绝", audit.deny || 0, audit.deny ? "bad" : "")}
       ${card("审计总数", audit.total || 0)}
     </div>
-    <div style="margin-top:16px;">${table(["服务", "目标契约", "转换次数"], transformRows)}</div>
+    <div style="margin-top:16px;">${table(["服务", "目标契约", "转换次数", "明细"], transformRows, { tableId: "gateway-transforms" })}</div>
   `;
 }
 
@@ -145,19 +230,20 @@ async function renderDebug() {
 async function renderScenarios() {
   const payload = await getJson("/ops/l2/scenarios");
   const items = payload.items || [];
-  const rows = items.map((item) =>
-    `<tr><td>${item.scenario_code}</td><td>${item.name}</td><td>${item.status}</td><td>${item.orchestrator_type}</td><td>${(item.dependencies || []).join(", ")}</td></tr>`
+  const rows = items.map((item, index) =>
+    `<tr><td>${item.scenario_code}</td><td>${item.name}</td><td>${item.status}</td><td>${item.orchestrator_type}</td><td>${(item.dependencies || []).join(", ")}</td><td>${detailButton("scenarios", index)}</td></tr>`
   );
+  window.__consoleDatasets = { ...(window.__consoleDatasets || {}), scenarios: items.map((item) => ({ ...item, __detailTitle: `${item.scenario_code} 场景详情` })) };
   return `
     <div class="toolbar"><h2>场景注册表</h2><button id="refresh-scenarios">刷新</button></div>
     <div class="grid stats" style="margin-top:16px;">
       ${card("场景数", items.length)}
-      ${card("活动场景", items.filter((item) => item.status === "active").length)}
+      ${card("活动场景", items.filter((item) => item.status === "active").length, "good")}
       ${card("依赖总数", items.reduce((sum, item) => sum + (item.dependencies || []).length, 0))}
       ${card("编排类型", [...new Set(items.map((item) => item.orchestrator_type))].length)}
     </div>
     ${filterBar({ searchId: "scenario-search", searchPlaceholder: "搜索场景编码或名称", statusId: "scenario-status", statuses: [...new Set(items.map((item) => item.status))] })}
-    <div style="margin-top:16px;">${table(["场景编码", "名称", "状态", "编排类型", "依赖服务"], rows)}</div>
+    <div style="margin-top:16px;">${table(["场景编码", "名称", "状态", "编排类型", "依赖服务", "明细"], rows, { tableId: "scenario-table" })}</div>
   `;
 }
 
@@ -165,104 +251,123 @@ async function renderCapabilities() {
   const payload = await getJson("/ops/l3/capabilities");
   const items = payload.items || [];
   const stats = payload.stats || {};
-  const rows = items.map((item) =>
-    `<tr><td>${item.capability_code}</td><td>${item.name}</td><td>${item.status}</td><td>${(item.input || []).join(", ")}</td><td>${(item.outputs || []).join(", ")}</td></tr>`
+  const rows = items.map((item, index) =>
+    `<tr><td>${item.capability_code}</td><td>${item.name}</td><td>${item.status}</td><td>${(item.input || []).join(", ")}</td><td>${(item.outputs || []).join(", ")}</td><td>${detailButton("capabilities", index)}</td></tr>`
   );
   const errorRows = Object.entries(stats.error_codes || {}).map(
     ([code, count]) => `<tr><td>${code}</td><td>${count}</td></tr>`
   );
+  window.__consoleDatasets = { ...(window.__consoleDatasets || {}), capabilities: items.map((item) => ({ ...item, __detailTitle: `${item.capability_code} 能力详情` })) };
   return `
     <div class="toolbar"><h2>原子能力目录</h2><button id="refresh-capabilities">刷新</button></div>
     <div class="grid stats" style="margin-top:16px;">
       ${card("能力数", items.length)}
-      ${card("调用量", stats.call_count || 0)}
-      ${card("拒绝量", stats.rejected_count || 0)}
-      ${card("错误种类", Object.keys(stats.error_codes || {}).length)}
+      ${card("调用量", stats.call_count || 0, "good")}
+      ${card("拒绝量", stats.rejected_count || 0, stats.rejected_count ? "warn" : "")}
+      ${card("错误种类", Object.keys(stats.error_codes || {}).length, Object.keys(stats.error_codes || {}).length ? "bad" : "")}
     </div>
     ${filterBar({ searchId: "capability-search", searchPlaceholder: "搜索能力编码或名称", statusId: "capability-status", statuses: [...new Set(items.map((item) => item.status))] })}
-    <div style="margin-top:16px;">${table(["能力编码", "名称", "状态", "输入", "输出"], rows)}</div>
-    <div style="margin-top:16px;">${table(["错误码", "次数"], errorRows)}</div>
+    <div style="margin-top:16px;">${table(["能力编码", "名称", "状态", "输入", "输出", "明细"], rows, { tableId: "capability-table" })}</div>
+    <div style="margin-top:16px;">${table(["错误码", "次数"], errorRows, { tableId: "capability-errors" })}</div>
   `;
 }
 
 async function renderRuntime() {
   const payload = await getJson("/ops/l4/runtime");
-  const rows = (payload.routes || []).map((item) =>
-    `<tr><td>${item.task_type}</td><td>${item.model_route}</td></tr>`
+  const routes = payload.routes || [];
+  const rows = routes.map((item, index) =>
+    `<tr><td>${item.task_type}</td><td>${item.model_route}</td><td>${detailButton("runtimeRoutes", index)}</td></tr>`
   );
+  window.__consoleDatasets = { ...(window.__consoleDatasets || {}), runtimeRoutes: routes.map((item) => ({ ...item, __detailTitle: `${item.task_type} 路由详情` })) };
   return `
     <div class="toolbar"><h2>运行时治理</h2><button id="refresh-runtime">刷新</button></div>
     <div class="grid stats" style="margin-top:16px;">
       ${card("执行中", payload.inflight ?? "-")}
       ${card("队列深度", payload.queue_depth ?? "-")}
       ${card("并发上限", payload.max_concurrency ?? "-")}
-      ${card("熔断器", (payload.circuit_breakers || []).length)}
+      ${card("熔断器", (payload.circuit_breakers || []).length, (payload.circuit_breakers || []).length ? "warn" : "")}
     </div>
-    <div style="margin-top:16px;">${table(["任务类型", "模型路由"], rows)}</div>
+    <div style="margin-top:16px;">${table(["任务类型", "模型路由", "明细"], rows, { tableId: "runtime-table" })}</div>
   `;
 }
 
 async function renderKnowledge() {
   const payload = await getJson("/ops/l5/knowledge");
-  const rows = (payload.knowledge_bases || []).map((item) =>
-    `<tr><td>${item.name}</td><td>${item.status}</td><td>${item.documents}</td></tr>`
+  const knowledgeBases = payload.knowledge_bases || [];
+  const pipelines = payload.pipelines || [];
+  const rows = knowledgeBases.map((item, index) =>
+    `<tr><td>${item.name}</td><td>${item.status}</td><td>${item.documents}</td><td>${detailButton("knowledgeBases", index)}</td></tr>`
   );
-  const pipelineRows = (payload.pipelines || []).map((item) =>
-    `<tr><td>${item.name}</td><td>${item.status}</td></tr>`
+  const pipelineRows = pipelines.map((item, index) =>
+    `<tr><td>${item.name}</td><td>${item.status}</td><td>${detailButton("knowledgePipelines", index)}</td></tr>`
   );
+  window.__consoleDatasets = {
+    ...(window.__consoleDatasets || {}),
+    knowledgeBases: knowledgeBases.map((item) => ({ ...item, __detailTitle: `${item.name} 知识库详情` })),
+    knowledgePipelines: pipelines.map((item) => ({ ...item, __detailTitle: `${item.name} 流水线详情` })),
+  };
   return `
     <div class="toolbar"><h2>知识运营</h2><button id="refresh-knowledge">刷新</button></div>
     <div class="grid stats" style="margin-top:16px;">
-      ${card("知识库", (payload.knowledge_bases || []).length)}
-      ${card("流水线", (payload.pipelines || []).length)}
-      ${card("可信资产", payload.quality?.trusted_assets ?? 0)}
-      ${card("问题数", payload.quality?.issues ?? 0)}
+      ${card("知识库", knowledgeBases.length)}
+      ${card("流水线", pipelines.length)}
+      ${card("可信资产", payload.quality?.trusted_assets ?? 0, "good")}
+      ${card("问题数", payload.quality?.issues ?? 0, (payload.quality?.issues ?? 0) ? "warn" : "")}
     </div>
-    ${filterBar({ searchId: "knowledge-search", searchPlaceholder: "搜索知识库名称", statusId: "knowledge-status", statuses: [...new Set((payload.knowledge_bases || []).map((item) => item.status))] })}
-    <div style="margin-top:16px;">${table(["知识库", "状态", "文档数"], rows)}</div>
-    <div style="margin-top:16px;">${table(["流水线", "状态"], pipelineRows)}</div>
+    ${filterBar({ searchId: "knowledge-search", searchPlaceholder: "搜索知识库名称", statusId: "knowledge-status", statuses: [...new Set(knowledgeBases.map((item) => item.status))] })}
+    <div style="margin-top:16px;">${table(["知识库", "状态", "文档数", "明细"], rows, { tableId: "knowledge-table" })}</div>
+    <div style="margin-top:16px;">${table(["流水线", "状态", "明细"], pipelineRows, { tableId: "knowledge-pipelines" })}</div>
   `;
 }
 
 async function renderModels() {
   const payload = await getJson("/ops/l6/models");
-  const rows = (payload.models || []).map((item) =>
-    `<tr><td>${item.name}</td><td>${item.type}</td><td>${item.status}</td></tr>`
+  const models = payload.models || [];
+  const evaluations = payload.evaluations || [];
+  const rows = models.map((item, index) =>
+    `<tr><td>${item.name}</td><td>${item.type}</td><td>${item.status}</td><td>${detailButton("models", index)}</td></tr>`
   );
-  const evalRows = (payload.evaluations || []).map((item) =>
-    `<tr><td>${item.benchmark}</td><td>${item.winner}</td></tr>`
+  const evalRows = evaluations.map((item, index) =>
+    `<tr><td>${item.benchmark}</td><td>${item.winner}</td><td>${detailButton("evaluations", index)}</td></tr>`
   );
+  window.__consoleDatasets = {
+    ...(window.__consoleDatasets || {}),
+    models: models.map((item) => ({ ...item, __detailTitle: `${item.name} 模型详情` })),
+    evaluations: evaluations.map((item) => ({ ...item, __detailTitle: `${item.benchmark} 评测详情` })),
+  };
   return `
     <div class="toolbar"><h2>模型中心</h2><button id="refresh-models">刷新</button></div>
     <div class="grid stats" style="margin-top:16px;">
-      ${card("模型数", (payload.models || []).length)}
-      ${card("评测项", (payload.evaluations || []).length)}
+      ${card("模型数", models.length)}
+      ${card("评测项", evaluations.length)}
       ${card("日预算", payload.cost_baseline?.daily_budget ?? 0)}
       ${card("币种", payload.cost_baseline?.currency ?? "-")}
     </div>
-    ${filterBar({ searchId: "model-search", searchPlaceholder: "搜索模型名称", statusId: "model-status", statuses: [...new Set((payload.models || []).map((item) => item.status))] })}
-    <div style="margin-top:16px;">${table(["模型", "类型", "状态"], rows)}</div>
-    <div style="margin-top:16px;">${table(["基准", "胜出模型"], evalRows)}</div>
+    ${filterBar({ searchId: "model-search", searchPlaceholder: "搜索模型名称", statusId: "model-status", statuses: [...new Set(models.map((item) => item.status))] })}
+    <div style="margin-top:16px;">${table(["模型", "类型", "状态", "明细"], rows, { tableId: "model-table" })}</div>
+    <div style="margin-top:16px;">${table(["基准", "胜出模型", "明细"], evalRows, { tableId: "evaluation-table" })}</div>
   `;
 }
 
 async function renderPlatform() {
   const payload = await getJson("/ops/l7/platform");
-  const rows = [
-    `<tr><td>healthcheck</td><td>${payload.healthcheck}</td></tr>`,
-    `<tr><td>build_ready</td><td>${payload.build_ready}</td></tr>`,
-    `<tr><td>test_ready</td><td>${payload.test_ready}</td></tr>`,
-    `<tr><td>run_ready</td><td>${payload.run_ready}</td></tr>`,
+  const items = [
+    { item: "healthcheck", status: payload.healthcheck },
+    { item: "build_ready", status: payload.build_ready },
+    { item: "test_ready", status: payload.test_ready },
+    { item: "run_ready", status: payload.run_ready },
   ];
+  const rows = items.map((item, index) => `<tr><td>${item.item}</td><td>${String(item.status)}</td><td>${detailButton("platformItems", index)}</td></tr>`);
+  window.__consoleDatasets = { ...(window.__consoleDatasets || {}), platformItems: items.map((item) => ({ ...item, __detailTitle: `${item.item} 平台检查` })) };
   return `
     <div class="toolbar"><h2>平台底座</h2><button id="refresh-platform">刷新</button></div>
     <div class="grid stats" style="margin-top:16px;">
       ${card("服务状态", payload.status || "-")}
-      ${card("健康检查", payload.healthcheck ? "正常" : "异常")}
-      ${card("构建脚本", payload.build_ready ? "就绪" : "缺失")}
-      ${card("运行脚本", payload.run_ready ? "就绪" : "缺失")}
+      ${card("健康检查", payload.healthcheck ? "正常" : "异常", payload.healthcheck ? "good" : "bad")}
+      ${card("构建脚本", payload.build_ready ? "就绪" : "缺失", payload.build_ready ? "good" : "bad")}
+      ${card("运行脚本", payload.run_ready ? "就绪" : "缺失", payload.run_ready ? "good" : "bad")}
     </div>
-    <div style="margin-top:16px;">${table(["项目项", "状态"], rows)}</div>
+    <div style="margin-top:16px;">${table(["项目项", "状态", "明细"], rows, { tableId: "platform-table" })}</div>
   `;
 }
 
@@ -270,15 +375,16 @@ function rowText(row) {
   return row.textContent.toLowerCase();
 }
 
-function applyTableFilters(searchId, statusId, tableIndex, statusColumnIndex) {
+function applyTableFilters(searchId, statusId, tableSelector, statusColumnIndex) {
   const searchNode = document.getElementById(searchId);
   const statusNode = document.getElementById(statusId);
-  const tables = document.querySelectorAll(".table-wrap table");
-  const tableNode = tables[tableIndex];
+  const tableNode = document.querySelector(`[data-table-id="${tableSelector}"] table`);
   if (!searchNode || !statusNode || !tableNode) return;
   const update = () => {
     const searchValue = searchNode.value.trim().toLowerCase();
     const statusValue = statusNode.value.trim().toLowerCase();
+    updateSearchParam(searchId, searchNode.value.trim());
+    updateSearchParam(statusId, statusNode.value.trim());
     tableNode.querySelectorAll("tbody tr").forEach((row) => {
       const cells = row.querySelectorAll("td");
       const textMatch = !searchValue || rowText(row).includes(searchValue);
@@ -288,6 +394,7 @@ function applyTableFilters(searchId, statusId, tableIndex, statusColumnIndex) {
   };
   searchNode.addEventListener("input", update);
   statusNode.addEventListener("change", update);
+  update();
 }
 
 async function renderRoute(route) {
@@ -338,6 +445,15 @@ function bindInteractions() {
       navigate(link.dataset.path);
     });
   });
+  document.querySelectorAll(".detail-trigger").forEach((button) => {
+    button.addEventListener("click", () => openDetail(button.dataset.detailKind, Number(button.dataset.detailIndex)));
+  });
+  const closeButton = document.getElementById("detail-close");
+  if (closeButton) closeButton.addEventListener("click", closeDetail);
+  const drawer = document.getElementById("detail-drawer");
+  if (drawer) drawer.addEventListener("click", (event) => {
+    if (event.target === drawer) closeDetail();
+  });
   const send = document.getElementById("send-debug");
   if (send) send.addEventListener("click", sendDebugRequest);
   const trace = document.getElementById("load-trace");
@@ -356,16 +472,16 @@ function bindInteractions() {
   };
   Object.entries(refreshers).forEach(([id, path]) => {
     const node = document.getElementById(id);
-    if (node) node.addEventListener("click", () => navigate(path));
+    if (node) node.addEventListener("click", () => navigate(path, { keepQuery: true }));
   });
-  applyTableFilters("scenario-search", "scenario-status", 0, 2);
-  applyTableFilters("capability-search", "capability-status", 0, 2);
-  applyTableFilters("knowledge-search", "knowledge-status", 0, 1);
-  applyTableFilters("model-search", "model-status", 0, 2);
+  applyTableFilters("scenario-search", "scenario-status", "scenario-table", 2);
+  applyTableFilters("capability-search", "capability-status", "capability-table", 2);
+  applyTableFilters("knowledge-search", "knowledge-status", "knowledge-table", 1);
+  applyTableFilters("model-search", "model-status", "model-table", 2);
 }
 
 async function render() {
-  const pathname = window.location.pathname === "/console" ? "/console/dashboard" : window.location.pathname;
+  const pathname = currentPath();
   const current = routes.find((item) => item.path === pathname) || routes[0];
   document.getElementById("nav").innerHTML = routes.map(navLink).join("");
   document.getElementById("route-tag").textContent = current.label;
@@ -376,4 +492,7 @@ async function render() {
 }
 
 window.addEventListener("popstate", render);
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeDetail();
+});
 render();

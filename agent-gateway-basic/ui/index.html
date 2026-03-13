@@ -140,7 +140,12 @@
         padding: 16px;
       }
       .card.good { border-left: 4px solid var(--olive); }
+      .card.warn { border-left: 4px solid #c5911a; }
       .card.bad { border-left: 4px solid var(--danger); }
+      .badge { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+      .badge.good { background: rgba(96, 116, 54, 0.14); color: var(--olive); }
+      .badge.warn { background: rgba(197, 145, 26, 0.16); color: #8a640c; }
+      .badge.bad { background: rgba(157, 62, 53, 0.14); color: var(--danger); }
       .label {
         font-size: 12px;
         color: var(--muted);
@@ -203,6 +208,28 @@
         color: var(--muted);
         background: rgba(12, 122, 121, 0.06);
       }
+      .drawer-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 31, 0.38);
+        display: none;
+        align-items: stretch;
+        justify-content: flex-end;
+        z-index: 20;
+      }
+      .drawer-backdrop.open { display: flex; }
+      .drawer {
+        width: min(560px, 92vw);
+        background: rgba(255, 251, 245, 0.98);
+        border-left: 1px solid var(--line);
+        box-shadow: var(--shadow);
+        padding: 22px;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        gap: 16px;
+      }
+      .drawer-header { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+      .drawer-title { margin:0; font-family: "Iowan Old Style", "Palatino Linotype", serif; font-size: 28px; }
       @media (max-width: 1040px) {
         .app, .split, .stats, .cards { grid-template-columns: 1fr; }
         .sidebar { position: static; }
@@ -227,6 +254,18 @@
           <div id="view-root"></div>
         </section>
       </main>
+    </div>
+    <div class="drawer-backdrop" id="detail-drawer">
+      <aside class="drawer">
+        <div class="drawer-header">
+          <div>
+            <div class="eyebrow">查看详情</div>
+            <h2 class="drawer-title" id="detail-title">详情</h2>
+          </div>
+          <button class="secondary" id="detail-close">关闭</button>
+        </div>
+        <pre id="detail-body">{}</pre>
+      </aside>
     </div>
     <script src="/assets/app.js"></script>
   </body>
