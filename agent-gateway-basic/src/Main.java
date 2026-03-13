@@ -31,7 +31,10 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class Main {
     private static final int PORT = 8080;
@@ -127,6 +130,8 @@ public class Main {
                 stringMapOf("service", "qa"), stringMapOf("x-api-key", "demo-key-ops"), "{\"prompt\":\"test\"}"));
         assertEquals(200, ok.statusCode, "authorized request should pass");
         assertContains(ok.body, "\"provider\":\"agent-business-solution\"", "response should come from upstream");
+        assertContains(ok.body, "\"scenario_code\":\"intelligent_qa\"", "qa should be mapped to L2 scenario contract");
+        assertContains(ok.body, "\"question\":\"test\"", "qa prompt should be mapped to input.question");
 
         GatewayApp limitApp = GatewayApp.fromConfig(
                 defaultRoutes(),
@@ -186,7 +191,8 @@ public class Main {
                         "status", "ok",
                         "provider", route.upstreamName,
                         "upstream_url", route.invokeUrl,
-                        "request_method", request.method
+                        "request_method", request.method,
+                        "payload", buildUpstreamPayload(route, request)
                 )));
             }
 
@@ -742,7 +748,7 @@ public class Main {
                 connection.setReadTimeout(3000);
                 connection.setDoOutput(true);
                 connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-                byte[] payload = upstreamPayload(request).getBytes(StandardCharsets.UTF_8);
+                byte[] payload = buildUpstreamPayload(route, request).getBytes(StandardCharsets.UTF_8);
                 OutputStream outputStream = connection.getOutputStream();
                 outputStream.write(payload);
                 outputStream.flush();
@@ -766,13 +772,6 @@ public class Main {
             }
         }
 
-        private String upstreamPayload(GatewayRequest request) {
-            if (request.body == null || request.body.trim().isEmpty()) {
-                return jsonObject(mapOf("prompt", "", "document", ""));
-            }
-            return request.body;
-        }
-
         @Override
         public boolean checkHealth(RouteConfig route) {
             HttpURLConnection connection = null;
@@ -792,6 +791,74 @@ public class Main {
                 }
             }
         }
+    }
+
+    private static String buildUpstreamPayload(RouteConfig route, GatewayRequest request) {
+        if ("qa".equals(route.service)) {
+            return qaScenarioPayload(request);
+        }
+        if (request.body == null || request.body.trim().isEmpty()) {
+            return jsonObject(mapOf("prompt", "", "document", ""));
+        }
+        return request.body;
+    }
+
+    private static String qaScenarioPayload(GatewayRequest request) {
+        String requestId = extractJsonString(request.body, "request_id");
+        if (requestId.isEmpty()) {
+            requestId = "gw-" + UUID.randomUUID().toString();
+        }
+        String tenantId = extractJsonString(request.body, "tenant_id");
+        if (tenantId.isEmpty()) {
+            tenantId = headerOrDefault(request, "x-tenant-id", "gateway");
+        }
+        String operatorId = extractJsonString(request.body, "operator_id");
+        if (operatorId.isEmpty()) {
+            operatorId = headerOrDefault(request, "x-operator-id", "gateway");
+        }
+        String question = extractJsonString(request.body, "question");
+        if (question.isEmpty()) {
+            question = extractJsonString(request.body, "prompt");
+        }
+        String debugRaw = extractJsonString(request.body, "debug");
+        boolean debug = "true".equalsIgnoreCase(debugRaw);
+        return jsonObject(mapOf(
+                "request_id", requestId,
+                "scenario_code", "intelligent_qa",
+                "tenant_id", tenantId,
+                "operator_id", operatorId,
+                "input", jsonObject(mapOf(
+                        "question", question
+                )),
+                "context", jsonObject(mapOf(
+                        "channel", "gateway",
+                        "source_system", "agent-gateway-basic",
+                        "service", "qa"
+                )),
+                "options", jsonObject(mapOf(
+                        "debug", debug
+                ))
+        ));
+    }
+
+    private static String headerOrDefault(GatewayRequest request, String headerName, String defaultValue) {
+        String value = request.header(headerName);
+        if (value == null || value.trim().isEmpty()) {
+            return defaultValue;
+        }
+        return value;
+    }
+
+    private static String extractJsonString(String body, String key) {
+        if (body == null || body.trim().isEmpty()) {
+            return "";
+        }
+        Pattern pattern = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*\"([^\"]*)\"");
+        Matcher matcher = pattern.matcher(body);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        return "";
     }
 
     private static final class InvokeHandler implements HttpHandler {

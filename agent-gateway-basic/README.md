@@ -36,6 +36,14 @@ Headers:
 - `x-api-key: demo-key-ops`
 - `x-api-key: demo-key-business`
 - `x-api-key: demo-key-partner`
+- `x-tenant-id: <tenant>`
+- `x-operator-id: <operator>`
+
+QA contract mapping:
+- 当 `service=qa` 时，L1 会把网关请求转换为 L2 `agent-business-solution` 的标准契约。
+- `prompt` 会映射为 `input.question`
+- `service=qa` 会映射为 `scenario_code=intelligent_qa`
+- `x-tenant-id`、`x-operator-id` 会映射为 `tenant_id`、`operator_id`
 
 Capabilities:
 - API Key 鉴权
@@ -51,3 +59,4 @@ Capabilities:
 - 统一运营总览接口
 - 配置热重载
 - 指标持久化与历史查询
+- QA 请求契约已与 L2 `intelligent_qa` 场景对齐
