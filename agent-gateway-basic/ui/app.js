@@ -454,6 +454,7 @@ async function renderRoute(route) {
 
 async function sendDebugRequest() {
   const service = document.getElementById("service").value;
+  const scenario = document.getElementById("qa-scenario").value;
   const transformedNode = document.getElementById("transformed-request");
   const gatewayNode = document.getElementById("gateway-response");
   const traceNode = document.getElementById("trace-response");
@@ -461,6 +462,8 @@ async function sendDebugRequest() {
   gatewayNode.textContent = "等待网关响应...";
   traceNode.textContent = "等待链路追踪结果...";
   try {
+    const normalizedPayload = normalizeDebugPayload(service, scenario, document.getElementById("request-body").value);
+    document.getElementById("request-body").value = pretty(normalizedPayload);
     const payload = await getJson(`/debug/request?service=${encodeURIComponent(service)}`, {
       method: "POST",
       headers: {
@@ -469,15 +472,9 @@ async function sendDebugRequest() {
         "x-tenant-id": document.getElementById("tenant-id").value,
         "x-operator-id": document.getElementById("operator-id").value,
       },
-      body: document.getElementById("request-body").value,
+      body: JSON.stringify(normalizedPayload),
     });
-    const requestId = (() => {
-      try {
-        return JSON.parse(document.getElementById("request-body").value).request_id || "";
-      } catch (error) {
-        return "";
-      }
-    })();
+    const requestId = normalizedPayload.request_id || "";
     if (requestId) {
       document.getElementById("trace-id").value = requestId;
     }
@@ -505,6 +502,48 @@ async function replayTrace() {
   const requestId = document.getElementById("trace-id").value;
   const payload = await getJson(`/debug/replay/${encodeURIComponent(requestId)}`, { method: "POST" });
   document.getElementById("trace-response").textContent = pretty(payload);
+}
+
+function safeParseJson(text) {
+  try {
+    return JSON.parse(text || "{}");
+  } catch (error) {
+    return null;
+  }
+}
+
+function normalizeDebugPayload(service, scenario, rawText) {
+  const template = debugTemplate(service, scenario);
+  const parsed = safeParseJson(rawText);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return template;
+  }
+  const merged = { ...template, ...parsed };
+  if (service === "qa") {
+    merged.scenario_code = parsed.scenario_code || template.scenario_code;
+    if (merged.scenario_code === "procurement_file_review" && !merged.file_content) {
+      merged.file_content = template.file_content;
+    }
+    if (merged.scenario_code === "contract_review" && !merged.contract_text) {
+      merged.contract_text = template.contract_text;
+    }
+    if (merged.scenario_code === "compliance_review" && !merged.review_text) {
+      merged.review_text = template.review_text;
+    }
+    if (merged.scenario_code === "intelligent_qa" && !merged.prompt && !merged.question) {
+      merged.prompt = template.prompt;
+    }
+  }
+  if (service === "compliance" && !merged.document && !merged.prompt) {
+    merged.document = template.document;
+  }
+  if (service === "pricing" && !merged.payload && !merged.prompt) {
+    merged.prompt = template.prompt;
+  }
+  if (!merged.request_id) {
+    merged.request_id = template.request_id;
+  }
+  return merged;
 }
 
 function debugTemplate(service, scenario) {
