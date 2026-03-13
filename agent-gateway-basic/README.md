@@ -72,3 +72,4 @@ Capabilities:
 - QA 请求契约已与 L2 `intelligent_qa` 场景对齐
 - Compliance 与 Pricing 请求契约已分别对齐到 L3/L4 标准接口
 - `/ops/overview` 已包含契约转换统计
+- `/ops/overview` 已包含按契约类型聚合的错误码统计

@@ -183,6 +183,7 @@ public class Main {
         assertContains(overview, "\"metrics\":", "overview endpoint should embed metrics");
         assertContains(overview, "\"upstreams\":", "overview endpoint should embed upstreams");
         assertContains(overview, "\"contract_transformations\":", "overview endpoint should expose contract mapping stats");
+        assertContains(overview, "\"contract_error_codes\":", "overview endpoint should expose contract error code stats");
         String reload = app.reloadWithConfig(new GatewayDiskConfig(
                 defaultRoutes(),
                 defaultProfiles(),
@@ -460,6 +461,7 @@ public class Main {
                     "upstreams", upstreamsJson(),
                     "config", configJson(),
                     "contract_transformations", contractTransformationsJson(),
+                    "contract_error_codes", contractErrorCodesJson(recentAuditEntries),
                     "audit_summary", auditSummaryJson(recentAuditEntries),
                     "recent_audits", jsonObject(mapOf("items", "[" + String.join(",", recentAuditEntries) + "]"))
             ));
@@ -510,6 +512,33 @@ public class Main {
                         "service", route.service,
                         "target", contractTarget(route.service),
                         "transform_count", contractTransformCounts.containsKey(route.service) ? contractTransformCounts.get(route.service) : 0
+                )));
+            }
+            return jsonObject(mapOf("items", "[" + String.join(",", items) + "]"));
+        }
+
+        private String contractErrorCodesJson(List<String> recentAuditEntries) {
+            List<String> items = new ArrayList<String>();
+            for (RouteConfig route : configSnapshot.routesByService.values()) {
+                Map<String, Integer> errorCodes = new LinkedHashMap<String, Integer>();
+                for (String auditEntry : recentAuditEntries) {
+                    if (!route.service.equals(extractJsonString(auditEntry, "service"))) {
+                        continue;
+                    }
+                    if (!"DENY".equals(extractJsonString(auditEntry, "decision"))) {
+                        continue;
+                    }
+                    String reason = extractJsonString(auditEntry, "reason");
+                    if (reason.isEmpty()) {
+                        continue;
+                    }
+                    Integer count = errorCodes.containsKey(reason) ? errorCodes.get(reason) : 0;
+                    errorCodes.put(reason, count + 1);
+                }
+                items.add(jsonObject(mapOf(
+                        "service", route.service,
+                        "target", contractTarget(route.service),
+                        "error_codes", jsonObject(integerMapToObjectMap(errorCodes))
                 )));
             }
             return jsonObject(mapOf("items", "[" + String.join(",", items) + "]"));
