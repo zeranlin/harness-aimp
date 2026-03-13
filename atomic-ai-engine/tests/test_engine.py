@@ -9,3 +9,7 @@ assert response["result"]["clause_count"] >= 1
 intent = engine.invoke("intent_understanding", {"question": "采购评审里废标条款怎么判断？"})
 assert intent["result"]["intent"] == "procurement_review"
 print("engine-tests ok")
+
+overview = engine.ops_overview()
+assert "summary" in overview
+assert overview["summary"]["total_calls"] >= 2

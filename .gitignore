@@ -4,3 +4,4 @@ __pycache__/
 agent-gateway-basic/data/*.log
 agent-gateway-basic/data/metrics.log
 agent-business-solution/data/*.log
+atomic-ai-engine/data/

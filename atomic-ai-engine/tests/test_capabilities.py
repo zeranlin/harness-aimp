@@ -10,3 +10,6 @@ extract = engine.invoke("structured_extraction", {"document": "采购合同包�
 assert extract["result"]["fields"]["authorization_issue"] is True
 assert extract["result"]["fields"]["risk_level"] == "high"
 print("capability-tests ok")
+
+detail = engine.ops_capability_detail("structured_extraction")
+assert detail["manifest"]["capability_code"] == "structured_extraction"

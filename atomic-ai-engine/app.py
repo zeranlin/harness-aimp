@@ -26,6 +26,16 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/capabilities":
             self._json(200, {"items": engine.list_capabilities()})
             return
+        if self.path == "/ops/overview":
+            self._json(200, engine.ops_overview())
+            return
+        if self.path == "/ops/capabilities":
+            self._json(200, engine.ops_capabilities())
+            return
+        if self.path.startswith("/ops/capabilities/"):
+            capability_code = self.path.split("/")[-1]
+            self._json(200, engine.ops_capability_detail(capability_code))
+            return
         self._json(404, {"status": "error", "message": "not found"})
 
     def do_POST(self):

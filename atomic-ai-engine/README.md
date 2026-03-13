@@ -43,3 +43,11 @@ result = engine.invoke(capability_code="file_parse", payload={"content": "采购
 - knowledge_graph_retrieval
 - logic_tree_explanation
 - evidence_chain_locate
+
+
+## Ops endpoints (adapter mode)
+- `GET /ops/overview`
+- `GET /ops/capabilities`
+- `GET /ops/capabilities/{capability_code}`
+
+These endpoints expose capability-level calls, error codes, average latency, and recent invocation records.
