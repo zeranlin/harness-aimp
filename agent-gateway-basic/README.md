@@ -54,8 +54,12 @@ Headers:
 
 QA contract mapping:
 - 当 `service=qa` 时，L1 会把网关请求转换为 L2 `agent-business-solution` 的标准契约。
+- 默认 `scenario_code=intelligent_qa`
+- 也支持显式传入 `scenario_code`，用于调试 `procurement_file_review`、`contract_review`、`compliance_review`
 - `prompt` 会映射为 `input.question`
-- `service=qa` 会映射为 `scenario_code=intelligent_qa`
+- `file_content` 会映射为 `input.file_content`
+- `contract_text` 会映射为 `input.contract_text`
+- `review_text` 会映射为 `input.review_text`
 - `x-tenant-id`、`x-operator-id` 会映射为 `tenant_id`、`operator_id`
 
 Compliance contract mapping:
@@ -89,3 +93,4 @@ Capabilities:
 - 已提供路由式控制台页面：`/console/dashboard`、`/console/gateway`、`/console/scenarios`、`/console/capabilities`、`/console/runtime`、`/console/knowledge`、`/console/models`、`/console/platform`、`/console/debug`
 - 已提供 L2-L7 聚合接口，供控制台读取
 - 已提供 trace / replay 调试能力
+- 调试台现在支持完整链路调试，可从 L1 直接触发 `L2 -> L3 SDK -> L4 -> qwen3.5-27b`

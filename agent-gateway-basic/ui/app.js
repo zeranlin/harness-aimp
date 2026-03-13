@@ -203,16 +203,18 @@ async function renderGateway() {
 
 async function renderDebug() {
   return `
-    <div class="toolbar"><h2>契约调试</h2><div></div></div>
+    <div class="toolbar"><h2>完整链路调试</h2><div></div></div>
     <div class="split" style="margin-top:16px;">
       <div class="stack">
-        <div class="field"><label>服务</label><select id="service"><option value="qa">qa</option><option value="compliance">compliance</option><option value="pricing">pricing</option></select></div>
+        <div class="field"><label>调试链路</label><select id="service"><option value="qa">L1 -> L2 -> L3 -> L4</option><option value="compliance">L1 -> L3</option><option value="pricing">L1 -> L4</option></select></div>
+        <div class="field"><label>L2 场景</label><select id="qa-scenario"><option value="procurement_file_review">采购文件审查（完整链路）</option><option value="intelligent_qa">智能问答</option><option value="contract_review">合同审查</option><option value="compliance_review">合规审查</option></select></div>
         <div class="field"><label>x-api-key</label><input id="api-key" value="demo-key-ops" /></div>
         <div class="field"><label>x-tenant-id</label><input id="tenant-id" value="demo" /></div>
         <div class="field"><label>x-operator-id</label><input id="operator-id" value="operator-1" /></div>
-        <div class="field"><label>请求体</label><textarea id="request-body">{ "request_id": "req-ui-001", "prompt": "采购评审里废标条款怎么判断？" }</textarea></div>
+        <div class="field"><label>请求体</label><textarea id="request-body">{}</textarea></div>
         <div class="field"><label>Trace 请求 ID</label><input id="trace-id" value="req-ui-001" /></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="secondary" id="load-template">加载样例</button>
           <button id="send-debug">发送调试请求</button>
           <button class="secondary" id="load-trace">查看 Trace</button>
           <button class="secondary" id="replay-trace">执行 Replay</button>
@@ -221,7 +223,7 @@ async function renderDebug() {
       <div class="stack">
         <div><div class="label">转换后契约</div><pre id="transformed-request">{}</pre></div>
         <div><div class="label">网关响应</div><pre id="gateway-response">{}</pre></div>
-        <div><div class="label">Trace / Replay 结果</div><pre id="trace-response">{}</pre></div>
+        <div><div class="label">完整链路结果 / Trace</div><pre id="trace-response">{}</pre></div>
       </div>
     </div>
   `;
@@ -462,8 +464,19 @@ async function sendDebugRequest() {
     },
     body: document.getElementById("request-body").value,
   });
+  const requestId = (() => {
+    try {
+      return JSON.parse(document.getElementById("request-body").value).request_id || "";
+    } catch (error) {
+      return "";
+    }
+  })();
+  if (requestId) {
+    document.getElementById("trace-id").value = requestId;
+  }
   document.getElementById("transformed-request").textContent = pretty(payload.transformed_request || payload);
   document.getElementById("gateway-response").textContent = pretty(payload.gateway_response || payload);
+  document.getElementById("trace-response").textContent = pretty(payload.chain_trace || {});
 }
 
 async function loadTrace() {
@@ -476,6 +489,60 @@ async function replayTrace() {
   const requestId = document.getElementById("trace-id").value;
   const payload = await getJson(`/debug/replay/${encodeURIComponent(requestId)}`, { method: "POST" });
   document.getElementById("trace-response").textContent = pretty(payload);
+}
+
+function debugTemplate(service, scenario) {
+  if (service === "pricing") {
+    return {
+      request_id: "req-ui-pricing-001",
+      prompt: "请基于本次采购预算做价格校准，并说明异常报价风险与建议，输出简要摘要"
+    };
+  }
+  if (service === "compliance") {
+    return {
+      request_id: "req-ui-compliance-001",
+      document: "供应商响应文件存在授权链不完整与条款偏离风险，请输出结构化审查结果。"
+    };
+  }
+  if (scenario === "procurement_file_review") {
+    return {
+      request_id: "req-ui-procurement-001",
+      scenario_code: "procurement_file_review",
+      file_content: "本文件主要描述项目背景、供应范围和实施安排，请补充抽取潜在价格风险、结构化字段和建议摘要。"
+    };
+  }
+  if (scenario === "contract_review") {
+    return {
+      request_id: "req-ui-contract-001",
+      scenario_code: "contract_review",
+      contract_text: "甲乙双方签订采购合同，约定付款节点、违约责任和授权链要求，请给出合同审查摘要。"
+    };
+  }
+  if (scenario === "compliance_review") {
+    return {
+      request_id: "req-ui-l2-compliance-001",
+      scenario_code: "compliance_review",
+      review_text: "请审查响应文件中的授权链完整性与条款偏离风险，并输出合规结论。"
+    };
+  }
+  return {
+    request_id: "req-ui-qa-001",
+    scenario_code: "intelligent_qa",
+    prompt: "采购评审里废标条款怎么判断？请给出结论和依据。"
+  };
+}
+
+function syncDebugTemplate() {
+  const serviceNode = document.getElementById("service");
+  const scenarioNode = document.getElementById("qa-scenario");
+  const bodyNode = document.getElementById("request-body");
+  if (!serviceNode || !scenarioNode || !bodyNode) return;
+  const payload = debugTemplate(serviceNode.value, scenarioNode.value);
+  bodyNode.value = pretty(payload);
+  if (payload.request_id) {
+    document.getElementById("trace-id").value = payload.request_id;
+  }
+  scenarioNode.parentElement.style.display = serviceNode.value === "qa" ? "" : "none";
 }
 
 function bindInteractions() {
@@ -496,6 +563,12 @@ function bindInteractions() {
   });
   const send = document.getElementById("send-debug");
   if (send) send.addEventListener("click", sendDebugRequest);
+  const template = document.getElementById("load-template");
+  if (template) template.addEventListener("click", syncDebugTemplate);
+  const serviceNode = document.getElementById("service");
+  if (serviceNode) serviceNode.addEventListener("change", syncDebugTemplate);
+  const scenarioNode = document.getElementById("qa-scenario");
+  if (scenarioNode) scenarioNode.addEventListener("change", syncDebugTemplate);
   const trace = document.getElementById("load-trace");
   if (trace) trace.addEventListener("click", loadTrace);
   const replay = document.getElementById("replay-trace");
@@ -518,6 +591,7 @@ function bindInteractions() {
   applyTableFilters("capability-search", "capability-status", "capability-table", 2);
   applyTableFilters("knowledge-search", "knowledge-status", "knowledge-table", 1);
   applyTableFilters("model-search", "model-status", "model-table", 2);
+  syncDebugTemplate();
 }
 
 async function render() {

@@ -452,6 +452,7 @@ public class Main {
 
             recordContractTransform(service);
             String transformedPayload = buildUpstreamPayload(route, request);
+            String targetContract = contractTarget(service, transformedPayload);
             GatewayResponse upstreamResponse = upstreamInvoker.invoke(route, request);
             int statusCode = upstreamResponse.statusCode;
             boolean authorized = statusCode >= 200 && statusCode < 300;
@@ -467,6 +468,7 @@ public class Main {
                     "status", authorized ? "ok" : "error",
                     "routed_service", service,
                     "client", clientName,
+                    "target_contract", targetContract,
                     "upstream", route.upstreamName,
                     "upstream_url", route.invokeUrl,
                     "duration_ms", Duration.between(startedAt, Instant.now()).toMillis(),
@@ -476,7 +478,7 @@ public class Main {
                     Instant.now(),
                     extractJsonString(transformedPayload, "request_id"),
                     service,
-                    contractTarget(service),
+                    targetContract,
                     request.headers,
                     request.body,
                     transformedPayload,
@@ -686,12 +688,15 @@ public class Main {
                     request.body
             );
             String transformedPayload = buildUpstreamPayload(route, invokeRequest);
+            String requestId = extractJsonString(transformedPayload, "request_id");
             GatewayResponse gatewayResponse = invoke(invokeRequest);
             return jsonObject(mapOf(
                     "service", service,
-                    "target_contract", contractTarget(service),
+                    "request_id", requestId,
+                    "target_contract", contractTarget(service, transformedPayload),
                     "transformed_request", transformedPayload,
-                    "gateway_response", gatewayResponse.body
+                    "gateway_response", gatewayResponse.body,
+                    "chain_trace", buildChainTraceJson(requestId, service)
             ));
         }
 
@@ -704,7 +709,7 @@ public class Main {
             if (trace == null) {
                 return jsonObject(mapOf("status", "error", "message", "trace not found", "request_id", requestId));
             }
-            return trace;
+            return buildChainTraceJson(requestId, extractJsonString(trace, "service"));
         }
 
         String replayByPath(String path) {
@@ -730,6 +735,39 @@ public class Main {
                     "service", service,
                     "replay_response", replay.body
             ));
+        }
+
+        String buildChainTraceJson(String requestId, String service) {
+            if (requestId == null || requestId.trim().isEmpty()) {
+                return jsonObject(mapOf(
+                        "status", "error",
+                        "message", "missing request id"
+                ));
+            }
+            String trace = findTrace(requestId);
+            String transformedRequest = trace == null ? "{}" : extractRawJson(trace, "transformed_request");
+            String gatewayResponse = trace == null ? "{}" : extractRawJson(trace, "gateway_response");
+            String l2Execution = "{}";
+            if ("qa".equals(service)) {
+                l2Execution = fetchJson("http://127.0.0.1:8002/executions/" + requestId, "{}");
+            }
+            String l3Capabilities = capabilityInvocationsJson(requestId);
+            String l4Runtime = runtimeJobsJson(requestId);
+            boolean qwenHit = l4Runtime.indexOf("qwen3.5-27b") >= 0 || gatewayResponse.indexOf("qwen3.5-27b") >= 0;
+            return "{"
+                    + "\"status\":\"" + (trace == null ? "partial" : "ok") + "\","
+                    + "\"request_id\":\"" + escapeJson(requestId) + "\","
+                    + "\"service\":\"" + escapeJson(service) + "\","
+                    + "\"summary\":" + jsonObject(mapOf(
+                            "target_contract", contractTarget(service, transformedRequest),
+                            "complete_chain", gatewayResponse.indexOf("\"status\":\"ok\"") >= 0 || gatewayResponse.indexOf("\"status\": \"ok\"") >= 0,
+                            "hit_qwen35_27b", qwenHit
+                    )) + ","
+                    + "\"l1_gateway\":" + (trace == null ? "{}" : trace) + ","
+                    + "\"l2_execution\":" + l2Execution + ","
+                    + "\"l3_capabilities\":" + l3Capabilities + ","
+                    + "\"l4_runtime\":" + l4Runtime
+                    + "}";
         }
 
         synchronized String reloadJson() throws IOException {
@@ -896,7 +934,7 @@ public class Main {
             for (RouteConfig route : configSnapshot.routesByService.values()) {
                 items.add(jsonObject(mapOf(
                         "service", route.service,
-                        "target", contractTarget(route.service),
+                        "target", contractTarget(route.service, ""),
                         "transform_count", contractTransformCounts.containsKey(route.service) ? contractTransformCounts.get(route.service) : 0
                 )));
             }
@@ -923,11 +961,60 @@ public class Main {
                 }
                 items.add(jsonObject(mapOf(
                         "service", route.service,
-                        "target", contractTarget(route.service),
+                        "target", contractTarget(route.service, ""),
                         "error_codes", jsonObject(integerMapToObjectMap(errorCodes))
                 )));
             }
             return jsonObject(mapOf("items", "[" + String.join(",", items) + "]"));
+        }
+
+        private String capabilityInvocationsJson(String requestIdPrefix) {
+            File capabilityLog = new File(projectRoot, "../atomic-ai-engine/data/capability_invocations.log");
+            List<String> items = new ArrayList<String>();
+            if (!capabilityLog.exists()) {
+                return jsonObject(mapOf("count", 0, "items", "[]"));
+            }
+            BufferedReader reader = null;
+            try {
+                reader = new BufferedReader(new FileReader(capabilityLog));
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String lineRequestId = extractJsonString(line, "request_id");
+                    if (lineRequestId.startsWith(requestIdPrefix)) {
+                        items.add(line);
+                    }
+                }
+            } catch (IOException ignored) {
+                return jsonObject(mapOf("count", 0, "items", "[]"));
+            } finally {
+                if (reader != null) {
+                    try {
+                        reader.close();
+                    } catch (IOException ignored) {
+                    }
+                }
+            }
+            return jsonObject(mapOf(
+                    "count", items.size(),
+                    "items", "[" + String.join(",", items) + "]"
+            ));
+        }
+
+        private String runtimeJobsJson(String requestIdPrefix) {
+            String jobsPayload = fetchJson("http://127.0.0.1:8081/ops/jobs", jsonObject(mapOf("items", "[]")));
+            String itemsJson = extractRawJson(jobsPayload, "items");
+            List<String> items = topLevelJsonObjects(itemsJson);
+            List<String> matches = new ArrayList<String>();
+            for (String item : items) {
+                String lineRequestId = extractJsonString(item, "request_id");
+                if (lineRequestId.startsWith(requestIdPrefix)) {
+                    matches.add(item);
+                }
+            }
+            return jsonObject(mapOf(
+                    "count", matches.size(),
+                    "items", "[" + String.join(",", matches) + "]"
+            ));
         }
 
         private void appendAudit(AuditEvent event) {
@@ -1272,16 +1359,49 @@ public class Main {
         if (question.isEmpty()) {
             question = extractJsonString(request.body, "prompt");
         }
+        String scenarioCode = extractJsonString(request.body, "scenario_code");
+        if (scenarioCode.isEmpty()) {
+            scenarioCode = "intelligent_qa";
+        }
+        String fileContent = extractJsonString(request.body, "file_content");
+        if (fileContent.isEmpty()) {
+            fileContent = extractJsonString(request.body, "document");
+        }
+        if (fileContent.isEmpty()) {
+            fileContent = extractJsonString(request.body, "prompt");
+        }
+        String contractText = extractJsonString(request.body, "contract_text");
+        if (contractText.isEmpty()) {
+            contractText = extractJsonString(request.body, "document");
+        }
+        if (contractText.isEmpty()) {
+            contractText = extractJsonString(request.body, "prompt");
+        }
+        String reviewText = extractJsonString(request.body, "review_text");
+        if (reviewText.isEmpty()) {
+            reviewText = extractJsonString(request.body, "document");
+        }
+        if (reviewText.isEmpty()) {
+            reviewText = extractJsonString(request.body, "prompt");
+        }
         String debugRaw = extractJsonString(request.body, "debug");
         boolean debug = "true".equalsIgnoreCase(debugRaw);
+        String inputPayload;
+        if ("procurement_file_review".equals(scenarioCode)) {
+            inputPayload = jsonObject(mapOf("file_content", fileContent));
+        } else if ("contract_review".equals(scenarioCode)) {
+            inputPayload = jsonObject(mapOf("contract_text", contractText));
+        } else if ("compliance_review".equals(scenarioCode)) {
+            inputPayload = jsonObject(mapOf("review_text", reviewText));
+        } else {
+            inputPayload = jsonObject(mapOf("question", question));
+        }
         return jsonObject(mapOf(
                 "request_id", requestId,
-                "scenario_code", "intelligent_qa",
+                "scenario_code", scenarioCode,
                 "tenant_id", tenantId,
                 "operator_id", operatorId,
-                "input", jsonObject(mapOf(
-                        "question", question
-                )),
+                "input", inputPayload,
                 "context", jsonObject(mapOf(
                         "channel", "gateway",
                         "source_system", "agent-gateway-basic",
@@ -1369,9 +1489,13 @@ public class Main {
         ));
     }
 
-    private static String contractTarget(String service) {
+    private static String contractTarget(String service, String transformedPayload) {
         if ("qa".equals(service)) {
-            return "L2.intelligent_qa";
+            String scenarioCode = extractJsonString(transformedPayload, "scenario_code");
+            if (scenarioCode.isEmpty()) {
+                scenarioCode = "intelligent_qa";
+            }
+            return "L2." + scenarioCode;
         }
         if ("compliance".equals(service)) {
             return "L3.structured_extraction";
@@ -1446,6 +1570,47 @@ public class Main {
             }
         }
         return "{}";
+    }
+
+    private static List<String> topLevelJsonObjects(String jsonArray) {
+        List<String> items = new ArrayList<String>();
+        if (jsonArray == null || jsonArray.trim().isEmpty() || "[]".equals(jsonArray.trim())) {
+            return items;
+        }
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+        int start = -1;
+        for (int i = 0; i < jsonArray.length(); i++) {
+            char c = jsonArray.charAt(i);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+                continue;
+            }
+            if (c == '{') {
+                if (depth == 0) {
+                    start = i;
+                }
+                depth += 1;
+            } else if (c == '}') {
+                depth -= 1;
+                if (depth == 0 && start >= 0) {
+                    items.add(jsonArray.substring(start, i + 1));
+                    start = -1;
+                }
+            }
+        }
+        return items;
     }
 
     private static final class InvokeHandler implements HttpHandler {
