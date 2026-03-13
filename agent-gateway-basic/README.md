@@ -86,6 +86,6 @@ Capabilities:
 - Compliance 与 Pricing 请求契约已分别对齐到 L3/L4 标准接口
 - `/ops/overview` 已包含契约转换统计
 - `/ops/overview` 已包含按契约类型聚合的错误码统计
-- 已提供路由式控制台页面：`/console/dashboard`、`/console/debug`、`/console/scenarios`、`/console/runtime`、`/console/knowledge`、`/console/models`、`/console/platform`
+- 已提供路由式控制台页面：`/console/dashboard`、`/console/debug`、`/console/scenarios`、`/console/capabilities`、`/console/runtime`、`/console/knowledge`、`/console/models`、`/console/platform`
 - 已提供 L2-L7 聚合接口，供控制台读取
 - 已提供 trace / replay 调试能力

@@ -2,6 +2,7 @@ const routes = [
   { path: "/console/dashboard", label: "总览", title: "系统总览", description: "查看七层健康、总览指标与关键异常。" },
   { path: "/console/debug", label: "调试台", title: "调试工作台", description: "构造请求、查看契约转换、Trace 与 Replay。" },
   { path: "/console/scenarios", label: "场景层", title: "L2 场景运营", description: "查看场景编排、状态与执行入口。" },
+  { path: "/console/capabilities", label: "能力层", title: "L3 原子能力", description: "查看能力目录、状态、输入输出与原子能力定义。" },
   { path: "/console/runtime", label: "运行时", title: "L4 模型运行时", description: "查看模型运行时并发、路由与重试策略。" },
   { path: "/console/knowledge", label: "知识运营", title: "L5 知识运营", description: "查看知识库与数据流水线状态。" },
   { path: "/console/models", label: "模型中心", title: "L6 模型中心", description: "查看模型注册、评测与成本基线。" },
@@ -96,6 +97,17 @@ async function renderScenarios() {
   `;
 }
 
+async function renderCapabilities() {
+  const payload = await getJson("/ops/l3/capabilities");
+  const items = payload.items || [];
+  return `
+    <div class="toolbar"><h2>原子能力目录</h2><button id="refresh-capabilities">刷新</button></div>
+    <div class="grid cards" style="margin-top:16px;">
+      ${items.map((item) => sectionCard(item.capability_code, `${item.name} · ${item.status}<br/>输入：${(item.input || []).join(", ")}<br/>输出：${(item.outputs || []).join(", ")}`)).join("") || sectionCard("状态", payload.message || "暂无能力")}
+    </div>
+  `;
+}
+
 async function renderRuntime() {
   const payload = await getJson("/ops/l4/runtime");
   return `
@@ -147,6 +159,7 @@ async function renderRoute(route) {
   if (route.path === "/console/dashboard") return renderDashboard();
   if (route.path === "/console/debug") return renderDebug();
   if (route.path === "/console/scenarios") return renderScenarios();
+  if (route.path === "/console/capabilities") return renderCapabilities();
   if (route.path === "/console/runtime") return renderRuntime();
   if (route.path === "/console/knowledge") return renderKnowledge();
   if (route.path === "/console/models") return renderModels();
@@ -198,6 +211,7 @@ function bindInteractions() {
   const refreshers = {
     "refresh-dashboard": "/console/dashboard",
     "refresh-scenarios": "/console/scenarios",
+    "refresh-capabilities": "/console/capabilities",
     "refresh-runtime": "/console/runtime",
     "refresh-knowledge": "/console/knowledge",
     "refresh-models": "/console/models",
