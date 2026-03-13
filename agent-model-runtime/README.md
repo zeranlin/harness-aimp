@@ -14,8 +14,8 @@ Entrypoints:
 
 API:
 - `GET /health`
-- `POST /invoke`
 - `POST /runtime/invoke`
+- `POST /invoke`
 - `POST /runtime/async-jobs`
 - `GET /runtime/async-jobs/{job_id}`
 - `POST /runtime/async-jobs/{job_id}/cancel`

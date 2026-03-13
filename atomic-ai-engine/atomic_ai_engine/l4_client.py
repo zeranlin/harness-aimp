@@ -9,7 +9,7 @@ class ModelRuntimeClient:
     def invoke(self, task_type, payload):
         body = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
-            f"{self.base_url}/invoke",
+            f"{self.base_url}/runtime/invoke",
             data=body,
             headers={"Content-Type": "application/json"},
             method="POST",

@@ -197,7 +197,7 @@ class HttpBackedScenarioService(ScenarioService):
 
         model_call = call_dependency(
             "agent-model-runtime",
-            "http://127.0.0.1:8081/invoke",
+            "http://127.0.0.1:8081/runtime/invoke",
             {
                 "request_id": request_id,
                 "scenario_code": self.scenario_code,
