@@ -100,7 +100,7 @@ public class Main {
 
         GatewayApp limitApp = GatewayApp.fromConfig(
                 defaultRoutes(),
-                Collections.singletonList(new ClientProfile("limited", "demo-key-limited", 1, setOf("qa"))),
+                Collections.singletonList(new ClientProfile("limited", "demo-key-limited", 1, setOf("qa"), Collections.<String, Integer>emptyMap())),
                 fakeInvoker()
         );
         GatewayResponse first = limitApp.invoke(new GatewayRequest("GET", "/gateway/v1/invoke",
@@ -109,6 +109,23 @@ public class Main {
                 stringMapOf("service", "qa"), stringMapOf("x-api-key", "demo-key-limited"), ""));
         assertEquals(200, first.statusCode, "first limited request should pass");
         assertEquals(429, second.statusCode, "second limited request should be throttled");
+
+        Map<String, Integer> serviceQuotas = new LinkedHashMap<String, Integer>();
+        serviceQuotas.put("qa", 1);
+        GatewayApp splitQuotaApp = GatewayApp.fromConfig(
+                defaultRoutes(),
+                Collections.singletonList(new ClientProfile("split", "demo-key-split", 5, setOf("qa", "pricing"), serviceQuotas)),
+                fakeInvoker()
+        );
+        GatewayResponse splitQa = splitQuotaApp.invoke(new GatewayRequest("GET", "/gateway/v1/invoke",
+                stringMapOf("service", "qa"), stringMapOf("x-api-key", "demo-key-split"), ""));
+        GatewayResponse splitQaDenied = splitQuotaApp.invoke(new GatewayRequest("GET", "/gateway/v1/invoke",
+                stringMapOf("service", "qa"), stringMapOf("x-api-key", "demo-key-split"), ""));
+        GatewayResponse splitPricing = splitQuotaApp.invoke(new GatewayRequest("GET", "/gateway/v1/invoke",
+                stringMapOf("service", "pricing"), stringMapOf("x-api-key", "demo-key-split"), ""));
+        assertEquals(200, splitQa.statusCode, "service-specific first qa request should pass");
+        assertEquals(429, splitQaDenied.statusCode, "service-specific qa quota should be enforced");
+        assertEquals(200, splitPricing.statusCode, "pricing should use its own quota bucket");
 
         String config = app.configJson();
         assertContains(config, "\"service\":\"qa\"", "config endpoint should expose routes");
@@ -133,9 +150,9 @@ public class Main {
 
     private static List<ClientProfile> defaultProfiles() {
         return Arrays.asList(
-                new ClientProfile("ops", "demo-key-ops", 60, setOf("qa", "compliance", "pricing")),
-                new ClientProfile("business", "demo-key-business", 30, setOf("qa", "compliance")),
-                new ClientProfile("partner", "demo-key-partner", 10, setOf("qa"))
+                new ClientProfile("ops", "demo-key-ops", 60, setOf("qa", "compliance", "pricing"), Collections.<String, Integer>emptyMap()),
+                new ClientProfile("business", "demo-key-business", 30, setOf("qa", "compliance"), Collections.<String, Integer>emptyMap()),
+                new ClientProfile("partner", "demo-key-partner", 10, setOf("qa"), Collections.<String, Integer>emptyMap())
         );
     }
 
@@ -162,7 +179,7 @@ public class Main {
     private static final class GatewayApp {
         private final Map<String, ClientProfile> profilesByApiKey;
         private final Map<String, RouteConfig> routesByService;
-        private final Map<String, RateWindow> windowsByClient = new ConcurrentHashMap<String, RateWindow>();
+        private final Map<String, RateWindow> windowsByQuotaKey = new ConcurrentHashMap<String, RateWindow>();
         private final Map<String, ServiceMetrics> metricsByService = new ConcurrentHashMap<String, ServiceMetrics>();
         private final Deque<AuditEvent> auditEvents = new ArrayDeque<AuditEvent>();
         private final File auditLogFile;
@@ -237,15 +254,18 @@ public class Main {
                 )));
             }
 
-            RateWindow window = windowsByClient.containsKey(clientName) ? windowsByClient.get(clientName) : new RateWindow();
-            windowsByClient.put(clientName, window);
-            if (!window.allow(profile.requestsPerMinute)) {
+            String quotaKey = clientName + ":" + service;
+            RateWindow window = windowsByQuotaKey.containsKey(quotaKey) ? windowsByQuotaKey.get(quotaKey) : new RateWindow();
+            windowsByQuotaKey.put(quotaKey, window);
+            int requestsPerMinute = profile.quotaFor(service);
+            if (!window.allow(requestsPerMinute)) {
                 recordAudit(clientName, service, "DENY", "rate_limited", startedAt, 429);
                 incrementMetric(service, false, startedAt);
                 return GatewayResponse.json(429, jsonObject(mapOf(
                         "status", "error",
                         "message", "quota exceeded",
-                        "quota_per_minute", profile.requestsPerMinute
+                        "quota_per_minute", requestsPerMinute,
+                        "quota_scope", quotaKey
                 )));
             }
 
@@ -300,7 +320,8 @@ public class Main {
                 clients.add(jsonObject(mapOf(
                         "client", profile.name,
                         "requests_per_minute", profile.requestsPerMinute,
-                        "allowed_services", jsonArray(profile.allowedServices)
+                        "allowed_services", jsonArray(profile.allowedServices),
+                        "service_quotas", jsonObject(integerMapToObjectMap(profile.serviceRequestsPerMinute))
                 )));
             }
             return jsonObject(mapOf(
@@ -444,10 +465,23 @@ public class Main {
                         client,
                         required(properties, "client." + client + ".api_key"),
                         Integer.parseInt(required(properties, "client." + client + ".requests_per_minute")),
-                        csvToSet(required(properties, "client." + client + ".allowed_services"))
+                        csvToSet(required(properties, "client." + client + ".allowed_services")),
+                        parseServiceQuotas(properties, client)
                 ));
             }
             return profiles;
+        }
+
+        private static Map<String, Integer> parseServiceQuotas(Properties properties, String client) {
+            Map<String, Integer> quotas = new LinkedHashMap<String, Integer>();
+            String prefix = "client." + client + ".service.";
+            for (String key : properties.stringPropertyNames()) {
+                if (key.startsWith(prefix) && key.endsWith(".requests_per_minute")) {
+                    String service = key.substring(prefix.length(), key.length() - ".requests_per_minute".length());
+                    quotas.put(service, Integer.parseInt(required(properties, key)));
+                }
+            }
+            return quotas;
         }
 
         private static String required(Properties properties, String key) {
@@ -556,12 +590,18 @@ public class Main {
         private final String apiKey;
         private final int requestsPerMinute;
         private final Set<String> allowedServices;
+        private final Map<String, Integer> serviceRequestsPerMinute;
 
-        private ClientProfile(String name, String apiKey, int requestsPerMinute, Set<String> allowedServices) {
+        private ClientProfile(String name, String apiKey, int requestsPerMinute, Set<String> allowedServices, Map<String, Integer> serviceRequestsPerMinute) {
             this.name = name;
             this.apiKey = apiKey;
             this.requestsPerMinute = requestsPerMinute;
             this.allowedServices = allowedServices;
+            this.serviceRequestsPerMinute = serviceRequestsPerMinute;
+        }
+
+        private int quotaFor(String service) {
+            return serviceRequestsPerMinute.containsKey(service) ? serviceRequestsPerMinute.get(service) : requestsPerMinute;
         }
     }
 
@@ -757,6 +797,14 @@ public class Main {
         Map<String, Object> map = new LinkedHashMap<String, Object>();
         for (int i = 0; i < values.length; i += 2) {
             map.put(Objects.toString(values[i]), values[i + 1]);
+        }
+        return map;
+    }
+
+    private static Map<String, Object> integerMapToObjectMap(Map<String, Integer> values) {
+        Map<String, Object> map = new LinkedHashMap<String, Object>();
+        for (Map.Entry<String, Integer> entry : values.entrySet()) {
+            map.put(entry.getKey(), entry.getValue());
         }
         return map;
     }
