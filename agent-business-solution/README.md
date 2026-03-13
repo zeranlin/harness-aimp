@@ -13,13 +13,17 @@ API:
 - `GET /scenarios`
 - `GET /scenarios/intelligent_qa`
 - `GET /scenarios/contract_review`
+- `GET /scenarios/compliance_review`
 - `GET /executions/{request_id}`
 - `GET /ops/overview`
 - `POST /invoke`
 
 Current scope:
-- 已注册场景：`intelligent_qa`、`contract_review`
+- 已注册场景：`intelligent_qa`、`contract_review`、`compliance_review`
 - 已具备多场景注册与分发骨架
+- 已具备独立场景模块：`scenarios/*/service.py`
+- 已具备通用运行时：`scenario_runtime/runtime.py`
+- 已具备场景级测试：`tests/test_scenarios.py`
 - 已接通下游：`atomic-ai-service`、`agent-model-runtime`
 - 已具备执行记录：`data/executions.log`
 - 已具备下游超时与重试策略：2 秒超时，最多 2 次尝试

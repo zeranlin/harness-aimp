@@ -1,0 +1,29 @@
+{
+  "scenario_code": "compliance_review",
+  "name": "Compliance Review",
+  "version": "0.1.0",
+  "status": "active",
+  "orchestrator_type": "programmatic",
+  "entrypoint": "scenarios.compliance_review.service",
+  "dependencies": [
+    "atomic-ai-service",
+    "agent-model-runtime"
+  ],
+  "input_schema": {
+    "required": [
+      "input.review_text"
+    ]
+  },
+  "output_schema": {
+    "result": [
+      "review_summary",
+      "findings",
+      "risk_level",
+      "recommended_action",
+      "model_route"
+    ],
+    "metrics": [
+      "duration_ms"
+    ]
+  }
+}
