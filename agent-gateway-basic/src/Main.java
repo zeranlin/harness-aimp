@@ -79,6 +79,12 @@ public class Main {
                 return GatewayResponse.ok(app.upstreamsJson());
             }
         }));
+        server.createContext("/ops/overview", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) {
+                return GatewayResponse.ok(app.overviewJson());
+            }
+        }));
         server.setExecutor(null);
         System.out.println("agent-gateway-basic listening on " + PORT);
         server.start();
@@ -140,6 +146,9 @@ public class Main {
         assertContains(audits, "\"decision\":\"ALLOW\"", "audit endpoint should expose persisted entries");
         String upstreams = app.upstreamsJson();
         assertContains(upstreams, "\"service\":\"qa\"", "upstream endpoint should expose services");
+        String overview = app.overviewJson();
+        assertContains(overview, "\"metrics\":", "overview endpoint should embed metrics");
+        assertContains(overview, "\"upstreams\":", "overview endpoint should embed upstreams");
     }
 
     private static UpstreamInvoker fakeInvoker() {
@@ -383,6 +392,18 @@ public class Main {
             return jsonObject(mapOf("items", "[" + String.join(",", items) + "]"));
         }
 
+        String overviewJson() {
+            List<String> recentAuditEntries = readRecentAuditEntries();
+            return jsonObject(mapOf(
+                    "generated_at", Instant.now().toString(),
+                    "metrics", metricsJson(),
+                    "upstreams", upstreamsJson(),
+                    "config", configJson(),
+                    "audit_summary", auditSummaryJson(recentAuditEntries),
+                    "recent_audits", jsonObject(mapOf("items", "[" + String.join(",", recentAuditEntries) + "]"))
+            ));
+        }
+
         private void incrementMetric(String service, boolean authorized, Instant startedAt) {
             ServiceMetrics metrics = metricsByService.containsKey(service) ? metricsByService.get(service) : new ServiceMetrics();
             metricsByService.put(service, metrics);
@@ -450,6 +471,23 @@ public class Main {
                 }
             }
             return new ArrayList<String>(lines);
+        }
+
+        private String auditSummaryJson(List<String> auditEntries) {
+            int allowCount = 0;
+            int denyCount = 0;
+            for (String entry : auditEntries) {
+                if (entry.indexOf("\"decision\":\"ALLOW\"") >= 0) {
+                    allowCount += 1;
+                } else if (entry.indexOf("\"decision\":\"DENY\"") >= 0) {
+                    denyCount += 1;
+                }
+            }
+            return jsonObject(mapOf(
+                    "total", auditEntries.size(),
+                    "allow", allowCount,
+                    "deny", denyCount
+            ));
         }
     }
 

@@ -27,6 +27,7 @@ API:
 - `GET /ops/audits`
 - `GET /ops/config`
 - `GET /ops/upstreams`
+- `GET /ops/overview`
 
 Headers:
 - `x-api-key: demo-key-ops`
@@ -44,3 +45,4 @@ Capabilities:
 - 审计日志持久化到文件
 - 按客户端 + 服务粒度限流
 - Upstream 健康探测与短时熔断
+- 统一运营总览接口
