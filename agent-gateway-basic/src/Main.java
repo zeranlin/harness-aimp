@@ -85,6 +85,18 @@ public class Main {
                 return GatewayResponse.ok(app.overviewJson());
             }
         }));
+        server.createContext("/ops/reload", new JsonHandler(new ExchangeProcessor() {
+            @Override
+            public GatewayResponse handle(HttpExchange exchange) throws IOException {
+                if (!"POST".equals(exchange.getRequestMethod())) {
+                    return GatewayResponse.json(405, jsonObject(mapOf(
+                            "status", "error",
+                            "message", "method not allowed"
+                    )));
+                }
+                return GatewayResponse.ok(app.reloadJson());
+            }
+        }));
         server.setExecutor(null);
         System.out.println("agent-gateway-basic listening on " + PORT);
         server.start();
@@ -149,6 +161,8 @@ public class Main {
         String overview = app.overviewJson();
         assertContains(overview, "\"metrics\":", "overview endpoint should embed metrics");
         assertContains(overview, "\"upstreams\":", "overview endpoint should embed upstreams");
+        String reload = app.reloadWithConfig(new GatewayDiskConfig(defaultRoutes(), defaultProfiles(), new File(projectRoot(), "data/audits.log")));
+        assertContains(reload, "\"status\":\"ok\"", "reload should succeed");
     }
 
     private static UpstreamInvoker fakeInvoker() {
@@ -199,37 +213,39 @@ public class Main {
     }
 
     private static final class GatewayApp {
-        private final Map<String, ClientProfile> profilesByApiKey;
-        private final Map<String, RouteConfig> routesByService;
+        private volatile GatewayConfigSnapshot configSnapshot;
         private final Map<String, RateWindow> windowsByQuotaKey = new ConcurrentHashMap<String, RateWindow>();
         private final Map<String, ServiceMetrics> metricsByService = new ConcurrentHashMap<String, ServiceMetrics>();
         private final Map<String, CircuitBreakerState> circuitStates = new ConcurrentHashMap<String, CircuitBreakerState>();
         private final Deque<AuditEvent> auditEvents = new ArrayDeque<AuditEvent>();
+        private final File projectRoot;
         private final File auditLogFile;
         private final UpstreamInvoker upstreamInvoker;
 
-        private GatewayApp(Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, File auditLogFile, UpstreamInvoker upstreamInvoker) {
-            Map<String, ClientProfile> profilesMap = new LinkedHashMap<String, ClientProfile>();
-            for (ClientProfile profile : profiles) {
-                profilesMap.put(profile.apiKey, profile);
-            }
-            this.profilesByApiKey = profilesMap;
-            this.routesByService = routesByService;
+        private GatewayApp(File projectRoot, GatewayConfigSnapshot configSnapshot, File auditLogFile, UpstreamInvoker upstreamInvoker) {
+            this.projectRoot = projectRoot;
+            this.configSnapshot = configSnapshot;
             this.auditLogFile = auditLogFile;
             this.upstreamInvoker = upstreamInvoker;
         }
 
         static GatewayApp fromDisk(UpstreamInvoker upstreamInvoker) throws IOException {
-            GatewayDiskConfig config = GatewayDiskConfig.load(projectRoot());
-            return fromConfig(config.routesByService, config.clientProfiles, config.auditLogFile, upstreamInvoker);
+            File root = projectRoot();
+            GatewayDiskConfig config = GatewayDiskConfig.load(root);
+            return fromConfig(root, config.routesByService, config.clientProfiles, config.auditLogFile, upstreamInvoker);
         }
 
         static GatewayApp fromConfig(Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, UpstreamInvoker upstreamInvoker) {
-            return fromConfig(routesByService, profiles, new File(projectRoot(), "data/audits.log"), upstreamInvoker);
+            File root = projectRoot();
+            return fromConfig(root, routesByService, profiles, new File(root, "data/audits.log"), upstreamInvoker);
         }
 
         static GatewayApp fromConfig(Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, File auditLogFile, UpstreamInvoker upstreamInvoker) {
-            return new GatewayApp(routesByService, profiles, auditLogFile, upstreamInvoker);
+            return fromConfig(projectRoot(), routesByService, profiles, auditLogFile, upstreamInvoker);
+        }
+
+        static GatewayApp fromConfig(File projectRoot, Map<String, RouteConfig> routesByService, List<ClientProfile> profiles, File auditLogFile, UpstreamInvoker upstreamInvoker) {
+            return new GatewayApp(projectRoot, GatewayConfigSnapshot.from(routesByService, profiles), auditLogFile, upstreamInvoker);
         }
 
         GatewayResponse invoke(GatewayRequest request) {
@@ -237,6 +253,7 @@ public class Main {
             String service = request.queryParams.containsKey("service") ? request.queryParams.get("service") : "qa";
             String apiKey = request.header("x-api-key");
             String clientName = "anonymous";
+            GatewayConfigSnapshot snapshot = configSnapshot;
 
             if (apiKey == null || apiKey.trim().isEmpty()) {
                 recordAudit(clientName, service, "DENY", "missing_api_key", startedAt, 401);
@@ -246,7 +263,7 @@ public class Main {
                 )));
             }
 
-            ClientProfile profile = profilesByApiKey.get(apiKey);
+            ClientProfile profile = snapshot.profilesByApiKey.get(apiKey);
             if (profile == null) {
                 recordAudit(clientName, service, "DENY", "unknown_api_key", startedAt, 403);
                 return GatewayResponse.json(403, jsonObject(mapOf(
@@ -266,7 +283,7 @@ public class Main {
                 )));
             }
 
-            RouteConfig route = routesByService.get(service);
+            RouteConfig route = snapshot.routesByService.get(service);
             if (route == null) {
                 recordAudit(clientName, service, "DENY", "route_not_found", startedAt, 404);
                 incrementMetric(service, false, startedAt);
@@ -348,7 +365,7 @@ public class Main {
 
         String configJson() {
             List<String> routes = new ArrayList<String>();
-            for (RouteConfig route : routesByService.values()) {
+            for (RouteConfig route : configSnapshot.routesByService.values()) {
                 routes.add(jsonObject(mapOf(
                         "service", route.service,
                         "upstream", route.upstreamName,
@@ -358,7 +375,7 @@ public class Main {
             }
 
             List<String> clients = new ArrayList<String>();
-            for (ClientProfile profile : profilesByApiKey.values()) {
+            for (ClientProfile profile : configSnapshot.profilesByApiKey.values()) {
                 clients.add(jsonObject(mapOf(
                         "client", profile.name,
                         "requests_per_minute", profile.requestsPerMinute,
@@ -374,7 +391,7 @@ public class Main {
 
         String upstreamsJson() {
             List<String> items = new ArrayList<String>();
-            for (RouteConfig route : routesByService.values()) {
+            for (RouteConfig route : configSnapshot.routesByService.values()) {
                 CircuitBreakerState state = circuitStates.containsKey(route.service)
                         ? circuitStates.get(route.service)
                         : new CircuitBreakerState();
@@ -401,6 +418,20 @@ public class Main {
                     "config", configJson(),
                     "audit_summary", auditSummaryJson(recentAuditEntries),
                     "recent_audits", jsonObject(mapOf("items", "[" + String.join(",", recentAuditEntries) + "]"))
+            ));
+        }
+
+        synchronized String reloadJson() throws IOException {
+            return reloadWithConfig(GatewayDiskConfig.load(projectRoot));
+        }
+
+        synchronized String reloadWithConfig(GatewayDiskConfig diskConfig) {
+            configSnapshot = GatewayConfigSnapshot.from(diskConfig.routesByService, diskConfig.clientProfiles);
+            return jsonObject(mapOf(
+                    "status", "ok",
+                    "reloaded_at", Instant.now().toString(),
+                    "route_count", configSnapshot.routesByService.size(),
+                    "client_count", configSnapshot.profilesByApiKey.size()
             ));
         }
 
@@ -582,6 +613,24 @@ public class Main {
                 throw new IllegalStateException("missing config key: " + key);
             }
             return value.trim();
+        }
+    }
+
+    private static final class GatewayConfigSnapshot {
+        private final Map<String, RouteConfig> routesByService;
+        private final Map<String, ClientProfile> profilesByApiKey;
+
+        private GatewayConfigSnapshot(Map<String, RouteConfig> routesByService, Map<String, ClientProfile> profilesByApiKey) {
+            this.routesByService = routesByService;
+            this.profilesByApiKey = profilesByApiKey;
+        }
+
+        private static GatewayConfigSnapshot from(Map<String, RouteConfig> routesByService, List<ClientProfile> profiles) {
+            Map<String, ClientProfile> profilesMap = new LinkedHashMap<String, ClientProfile>();
+            for (ClientProfile profile : profiles) {
+                profilesMap.put(profile.apiKey, profile);
+            }
+            return new GatewayConfigSnapshot(routesByService, profilesMap);
         }
     }
 
