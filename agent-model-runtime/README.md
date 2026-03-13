@@ -4,7 +4,7 @@ L4 模型调度与执行层（Java）。
 
 当前定位：
 - 作为 L3 `atomic-ai-engine` 的模型执行治理运行时
-- 提供同步执行 MVP，并暴露运行态与作业视图
+- 提供同步执行 MVP，并补齐异步任务提交、查询与取消
 
 Entrypoints:
 - `scripts/build.sh`
@@ -16,6 +16,9 @@ API:
 - `GET /health`
 - `POST /invoke`
 - `POST /runtime/invoke`
+- `POST /runtime/async-jobs`
+- `GET /runtime/async-jobs/{job_id}`
+- `POST /runtime/async-jobs/{job_id}/cancel`
 - `GET /ops/runtime`
 - `GET /ops/overview`
 - `GET /ops/jobs`
@@ -28,5 +31,6 @@ API:
 - 有限重试
 - 模型级熔断与备用路由
 - 请求级作业记录
+- 同步与异步任务视图
 - 结果缓存复用
-- 运营总览与最近作业查询
+- 运营总览、最近作业与熔断状态查询

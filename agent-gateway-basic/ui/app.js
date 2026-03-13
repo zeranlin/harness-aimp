@@ -288,19 +288,46 @@ async function renderCapabilities() {
 async function renderRuntime() {
   const payload = await getJson("/ops/l4/runtime");
   const routes = payload.routes || [];
-  const rows = routes.map((item, index) =>
-    `<tr><td>${item.task_type}</td><td>${item.model_route}</td><td>${detailButton("runtimeRoutes", index)}</td></tr>`
+  const jobs = payload.recent_jobs || [];
+  const circuits = payload.circuit_breakers || [];
+  const routeRows = routes.map((item, index) =>
+    `<tr><td>${item.task_type}</td><td>${item.model_route}</td><td>${item.queue_name || "-"}</td><td>${item.timeout_ms || 0}</td><td>${item.max_attempts || 0}</td><td>${detailButton("runtimeRoutes", index)}</td></tr>`
   );
-  window.__consoleDatasets = { ...(window.__consoleDatasets || {}), runtimeRoutes: routes.map((item) => ({ ...item, __detailTitle: `${item.task_type} 路由详情` })) };
+  const jobRows = jobs.map((item, index) =>
+    `<tr><td>${item.job_id}</td><td>${item.task_type}</td><td>${item.mode || "sync"}</td><td>${item.status}</td><td>${item.model_route || "-"}</td><td>${item.cached ? "是" : "否"}</td><td>${detailButton("runtimeJobs", index)}</td></tr>`
+  );
+  const circuitRows = circuits.map((item, index) =>
+    `<tr><td>${item.model_route}</td><td>${item.state}</td><td>${item.failure_count}</td><td>${item.open_until || "-"}</td><td>${detailButton("runtimeCircuits", index)}</td></tr>`
+  );
+  window.__consoleDatasets = {
+    ...(window.__consoleDatasets || {}),
+    runtimeRoutes: routes.map((item) => ({ ...item, __detailTitle: `${item.task_type} 路由详情` })),
+    runtimeJobs: jobs.map((item) => ({ ...item, __detailTitle: `${item.job_id} 作业详情` })),
+    runtimeCircuits: circuits.map((item) => ({ ...item, __detailTitle: `${item.model_route} 熔断详情` })),
+  };
   return `
     <div class="toolbar"><h2>运行时治理</h2><button id="refresh-runtime">刷新</button></div>
     <div class="grid stats" style="margin-top:16px;">
       ${card("执行中", payload.inflight ?? "-")}
       ${card("队列深度", payload.queue_depth ?? "-")}
       ${card("并发上限", payload.max_concurrency ?? "-")}
-      ${card("熔断器", (payload.circuit_breakers || []).length, (payload.circuit_breakers || []).length ? "warn" : "")}
+      ${card("总调用", payload.total_calls ?? 0, "good")}
     </div>
-    <div style="margin-top:16px;">${table(["任务类型", "模型路由", "明细"], rows, { tableId: "runtime-table" })}</div>
+    <div class="grid stats" style="margin-top:16px;">
+      ${card("成功调用", payload.success_calls ?? 0, "good")}
+      ${card("失败调用", payload.error_calls ?? 0, (payload.error_calls || 0) ? "bad" : "")}
+      ${card("缓存命中", payload.cache_hits ?? 0, (payload.cache_hits || 0) ? "good" : "")}
+      ${card("异步提交", payload.async_submitted ?? 0)}
+    </div>
+    <div class="grid stats" style="margin-top:16px;">
+      ${card("异步取消", payload.async_cancelled ?? 0, (payload.async_cancelled || 0) ? "warn" : "")}
+      ${card("熔断器", circuits.length, circuits.some((item) => item.state === "OPEN") ? "warn" : "")}
+      ${card("路由数", routes.length)}
+      ${card("最近作业", jobs.length)}
+    </div>
+    <div style="margin-top:16px;">${table(["任务类型", "当前路由", "队列", "超时(ms)", "重试", "明细"], routeRows, { tableId: "runtime-table" })}</div>
+    <div style="margin-top:16px;">${table(["作业ID", "任务类型", "模式", "状态", "模型路由", "缓存", "明细"], jobRows, { tableId: "runtime-jobs-table" })}</div>
+    <div style="margin-top:16px;">${table(["模型路由", "状态", "失败次数", "打开截止", "明细"], circuitRows, { tableId: "runtime-circuits-table" })}</div>
   `;
 }
 

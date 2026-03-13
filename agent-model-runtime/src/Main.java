@@ -46,6 +46,7 @@ public class Main {
         server.createContext("/health", new HealthHandler());
         server.createContext("/invoke", new InvokeHandler());
         server.createContext("/runtime/invoke", new InvokeHandler());
+        server.createContext("/runtime/async-jobs", new AsyncJobsHandler());
         server.createContext("/ops/runtime", new RuntimeOverviewHandler());
         server.createContext("/ops/overview", new RuntimeOverviewHandler());
         server.createContext("/ops/jobs", new JobsHandler());
@@ -65,6 +66,10 @@ public class Main {
         }
         if (!"pricing_inference".equals(response.taskType)) {
             throw new IllegalStateException("task type should be preserved");
+        }
+        AsyncSubmission asyncSubmission = state.submitAsync(request, request.rawBody.length());
+        if (asyncSubmission.jobId == null || asyncSubmission.jobId.isEmpty()) {
+            throw new IllegalStateException("async job id should exist");
         }
         if (!state.snapshotOverview().contains("queue_depth")) {
             throw new IllegalStateException("overview should contain queue metrics");
@@ -111,6 +116,49 @@ public class Main {
         }
     }
 
+    static class AsyncJobsHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            String path = exchange.getRequestURI().getPath();
+            if ("/runtime/async-jobs".equals(path)) {
+                if (!"POST".equals(exchange.getRequestMethod())) {
+                    writeJson(exchange, 405, jsonObject(mapOf("status", "error", "message", "method not allowed")));
+                    return;
+                }
+                String body = readBody(exchange.getRequestBody());
+                RuntimeRequest request = RuntimeRequest.fromBody(body);
+                AsyncSubmission submission = STATE.submitAsync(request, body.length());
+                writeJson(exchange, 202, submission.toJson());
+                return;
+            }
+
+            String prefix = "/runtime/async-jobs/";
+            if (!path.startsWith(prefix)) {
+                writeJson(exchange, 404, jsonObject(mapOf("status", "error", "message", "not found")));
+                return;
+            }
+            String suffix = path.substring(prefix.length());
+            if (suffix.isEmpty()) {
+                writeJson(exchange, 404, jsonObject(mapOf("status", "error", "message", "job id required")));
+                return;
+            }
+            if (suffix.endsWith("/cancel")) {
+                String jobId = suffix.substring(0, suffix.length() - "/cancel".length());
+                if (!"POST".equals(exchange.getRequestMethod())) {
+                    writeJson(exchange, 405, jsonObject(mapOf("status", "error", "message", "method not allowed")));
+                    return;
+                }
+                writeJson(exchange, 200, STATE.cancelAsyncJob(jobId));
+                return;
+            }
+            if (!"GET".equals(exchange.getRequestMethod())) {
+                writeJson(exchange, 405, jsonObject(mapOf("status", "error", "message", "method not allowed")));
+                return;
+            }
+            writeJson(exchange, 200, STATE.getAsyncJob(suffix));
+        }
+    }
+
     static class RuntimeOverviewHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -144,17 +192,21 @@ public class Main {
         final int maxAttempts = 2;
         final Semaphore semaphore = new Semaphore(maxConcurrency, true);
         final ExecutorService workers = Executors.newFixedThreadPool(maxConcurrency);
+        final ExecutorService asyncCoordinator = Executors.newCachedThreadPool();
         final AtomicInteger inflight = new AtomicInteger(0);
         final AtomicInteger queueDepth = new AtomicInteger(0);
         final AtomicInteger totalCalls = new AtomicInteger(0);
         final AtomicInteger successCalls = new AtomicInteger(0);
         final AtomicInteger errorCalls = new AtomicInteger(0);
         final AtomicInteger cacheHits = new AtomicInteger(0);
+        final AtomicInteger asyncSubmitted = new AtomicInteger(0);
+        final AtomicInteger asyncCancelled = new AtomicInteger(0);
         final AtomicInteger nextJobId = new AtomicInteger(1);
         final Map<String, RoutePolicy> routes = new LinkedHashMap<String, RoutePolicy>();
         final Map<String, CircuitState> circuits = new ConcurrentHashMap<String, CircuitState>();
         final Map<String, CachedResult> cache = new ConcurrentHashMap<String, CachedResult>();
         final Map<String, JobRecord> jobsById = new ConcurrentHashMap<String, JobRecord>();
+        final Map<String, Future<?>> asyncFutures = new ConcurrentHashMap<String, Future<?>>();
         final Deque<JobRecord> recentJobs = new ArrayDeque<JobRecord>();
         final Object jobLock = new Object();
 
@@ -173,37 +225,121 @@ public class Main {
         }
 
         RuntimeResponse invoke(RuntimeRequest request, int payloadSize) {
-            long receivedAt = System.currentTimeMillis();
-            totalCalls.incrementAndGet();
             RoutePolicy route = routes.containsKey(request.taskType) ? routes.get(request.taskType) : routes.get("default");
-            JobRecord job = JobRecord.queued(nextJobId.getAndIncrement(), request, route.queueName, payloadSize);
+            JobRecord job = JobRecord.queued(nextJobId.getAndIncrement(), request, route.queueName, payloadSize, false);
             jobsById.put(job.jobId, job);
             appendRecentJob(job);
+            return executeJob(request, payloadSize, route, job, true);
+        }
 
+        AsyncSubmission submitAsync(RuntimeRequest request, int payloadSize) {
+            asyncSubmitted.incrementAndGet();
+            RoutePolicy route = routes.containsKey(request.taskType) ? routes.get(request.taskType) : routes.get("default");
+            JobRecord job = JobRecord.queued(nextJobId.getAndIncrement(), request, route.queueName, payloadSize, true);
+            jobsById.put(job.jobId, job);
+            appendRecentJob(job);
+            Future<?> future = asyncCoordinator.submit(new Runnable() {
+                @Override
+                public void run() {
+                    if (job.isCancelled()) {
+                        return;
+                    }
+                    job.markRunning();
+                    replaceRecentJob(job);
+                    try {
+                        RuntimeResponse response = executeJob(request, payloadSize, route, job, true);
+                        job.lastResponseJson = response.toJson();
+                    } catch (RuntimeException exc) {
+                        job.markFinished("error", route.primaryModelRoute, 0, 1, false, "RUNTIME_INTERNAL_ERROR", 0);
+                        job.lastResponseJson = jsonObject(mapOf(
+                                "status", "error",
+                                "job_id", job.jobId,
+                                "request_id", request.requestId,
+                                "task_type", request.taskType,
+                                "error_code", "RUNTIME_INTERNAL_ERROR",
+                                "message", exc.getMessage()
+                        ));
+                        replaceRecentJob(job);
+                    } finally {
+                        asyncFutures.remove(job.jobId);
+                    }
+                }
+            });
+            asyncFutures.put(job.jobId, future);
+            return new AsyncSubmission(job.jobId, request.requestId, "queued", route.queueName);
+        }
+
+        String getAsyncJob(String jobId) {
+            JobRecord job = jobsById.get(jobId);
+            if (job == null) {
+                return jsonObject(mapOf("status", "error", "message", "job not found", "job_id", jobId));
+            }
+            return jsonObject(mapOf(
+                    "status", "ok",
+                    "service", "agent-model-runtime",
+                    "item", rawJson(jsonObject(job.toMap())),
+                    "result", job.lastResponseJson == null ? rawJson("null") : rawJson(job.lastResponseJson)
+            ));
+        }
+
+        String cancelAsyncJob(String jobId) {
+            JobRecord job = jobsById.get(jobId);
+            if (job == null) {
+                return jsonObject(mapOf("status", "error", "message", "job not found", "job_id", jobId));
+            }
+            Future<?> future = asyncFutures.get(jobId);
+            boolean cancelled = false;
+            if (future != null) {
+                cancelled = future.cancel(true);
+            }
+            if (cancelled || "queued".equals(job.status) || "running".equals(job.status)) {
+                asyncCancelled.incrementAndGet();
+                job.markFinished("cancelled", job.modelRoute, job.attempts, Math.max(1, System.currentTimeMillis() - job.createdAtMs), false, "CANCELLED", job.queueWaitMs);
+                job.lastResponseJson = jsonObject(mapOf(
+                        "status", "cancelled",
+                        "job_id", job.jobId,
+                        "request_id", job.requestId,
+                        "task_type", job.taskType,
+                        "message", "async job cancelled"
+                ));
+                replaceRecentJob(job);
+            }
+            asyncFutures.remove(jobId);
+            return jsonObject(mapOf(
+                    "status", cancelled ? "ok" : "noop",
+                    "job_id", jobId,
+                    "job_status", job.status,
+                    "message", cancelled ? "async job cancelled" : "job was not cancellable"
+            ));
+        }
+
+        RuntimeResponse executeJob(RuntimeRequest request, int payloadSize, RoutePolicy route, JobRecord job, boolean countMetrics) {
+            if (countMetrics) {
+                totalCalls.incrementAndGet();
+            }
             String cacheKey = request.taskType + "::" + normalizeCacheKey(request.rawBody);
             CachedResult cached = cache.get(cacheKey);
             if (cached != null) {
-                cacheHits.incrementAndGet();
+                if (countMetrics) {
+                    cacheHits.incrementAndGet();
+                    successCalls.incrementAndGet();
+                }
                 RuntimeResponse cachedResponse = cached.response.copy();
                 cachedResponse.cached = true;
                 cachedResponse.queueWaitMs = 0;
                 cachedResponse.jobId = job.jobId;
-                cachedResponse.durationMs = Math.max(1, cachedResponse.durationMs);
                 job.markFinished("success", cachedResponse.modelRoute, cachedResponse.attempts, cachedResponse.durationMs, true, "cache_hit", 0);
                 replaceRecentJob(job);
-                successCalls.incrementAndGet();
                 return cachedResponse;
             }
 
             long queueStart = System.currentTimeMillis();
             queueDepth.incrementAndGet();
             try {
-                try {
-                    semaphore.acquire();
-                } catch (InterruptedException exc) {
-                    Thread.currentThread().interrupt();
-                    return failResponse(request, route, job, payloadSize, 503, "RUNTIME_INTERRUPTED", exc.getMessage(), 0, 0);
-                }
+                semaphore.acquire();
+            } catch (InterruptedException exc) {
+                Thread.currentThread().interrupt();
+                return failResponse(request, route, job, payloadSize, 503, "RUNTIME_INTERRUPTED", exc.getMessage(), 0, 0, countMetrics);
             } finally {
                 queueDepth.decrementAndGet();
             }
@@ -226,8 +362,10 @@ public class Main {
                                 System.currentTimeMillis() - startedAt, payloadSize, queueWaitMs, modelResult.result);
                         job.markFinished("success", selectedModelRoute, attempts, response.durationMs, false, "", queueWaitMs);
                         replaceRecentJob(job);
-                        successCalls.incrementAndGet();
                         circuits.get(selectedModelRoute).recordSuccess();
+                        if (countMetrics) {
+                            successCalls.incrementAndGet();
+                        }
                         cache.put(cacheKey, new CachedResult(response.copy()));
                         return response;
                     } catch (TimeoutException exc) {
@@ -250,8 +388,10 @@ public class Main {
                                 System.currentTimeMillis() - startedAt, payloadSize, queueWaitMs, modelResult.result);
                         job.markFinished("success", fallbackRoute, 1, response.durationMs, false, "fallback", queueWaitMs);
                         replaceRecentJob(job);
-                        successCalls.incrementAndGet();
                         circuits.get(fallbackRoute).recordSuccess();
+                        if (countMetrics) {
+                            successCalls.incrementAndGet();
+                        }
                         cache.put(cacheKey, new CachedResult(response.copy()));
                         return response;
                     } catch (Exception fallbackExc) {
@@ -260,7 +400,7 @@ public class Main {
                         circuits.get(fallbackRoute).recordFailure();
                     }
                 }
-                return failResponse(request, route, job, payloadSize, 504, lastErrorCode, lastErrorMessage, attempts, queueWaitMs);
+                return failResponse(request, route, job, payloadSize, 504, lastErrorCode, lastErrorMessage, attempts, queueWaitMs, countMetrics);
             } finally {
                 inflight.decrementAndGet();
                 semaphore.release();
@@ -275,8 +415,10 @@ public class Main {
         }
 
         private RuntimeResponse failResponse(RuntimeRequest request, RoutePolicy route, JobRecord job, int payloadSize, int httpStatus,
-                                             String errorCode, String message, int attempts, long queueWaitMs) {
-            errorCalls.incrementAndGet();
+                                             String errorCode, String message, int attempts, long queueWaitMs, boolean countMetrics) {
+            if (countMetrics) {
+                errorCalls.incrementAndGet();
+            }
             String selectedRoute = chooseModelRoute(route, circuits.get(route.primaryModelRoute));
             long durationMs = Math.max(1, System.currentTimeMillis() - job.createdAtMs);
             job.markFinished("error", selectedRoute, attempts, durationMs, false, errorCode, queueWaitMs);
@@ -314,6 +456,8 @@ public class Main {
                     "success_calls", successCalls.get(),
                     "error_calls", errorCalls.get(),
                     "cache_hits", cacheHits.get(),
+                    "async_submitted", asyncSubmitted.get(),
+                    "async_cancelled", asyncCancelled.get(),
                     "retry_policy", rawJson(jsonObject(mapOf("max_attempts", maxAttempts, "timeout_ms", 2000))),
                     "circuit_breakers", rawJson(snapshotCircuitItems()),
                     "routes", rawJson(jsonArray(routeItems)),
@@ -636,6 +780,31 @@ public class Main {
         }
     }
 
+    static class AsyncSubmission {
+        final String jobId;
+        final String requestId;
+        final String status;
+        final String queueName;
+
+        AsyncSubmission(String jobId, String requestId, String status, String queueName) {
+            this.jobId = jobId;
+            this.requestId = requestId;
+            this.status = status;
+            this.queueName = queueName;
+        }
+
+        String toJson() {
+            return jsonObject(mapOf(
+                    "status", "accepted",
+                    "service", "agent-model-runtime",
+                    "job_id", jobId,
+                    "request_id", requestId,
+                    "job_status", status,
+                    "queue_name", queueName
+            ));
+        }
+    }
+
     static class ModelExecutionResult {
         final Map<String, Object> result;
 
@@ -709,6 +878,7 @@ public class Main {
         final String queueName;
         final int payloadSize;
         final long createdAtMs;
+        final boolean async;
         String status;
         String modelRoute;
         int attempts;
@@ -717,25 +887,31 @@ public class Main {
         String errorCode;
         long queueWaitMs;
         long finishedAtMs;
+        String lastResponseJson;
 
-        JobRecord(String jobId, String requestId, String taskType, String queueName, int payloadSize, long createdAtMs) {
+        JobRecord(String jobId, String requestId, String taskType, String queueName, int payloadSize, long createdAtMs, boolean async) {
             this.jobId = jobId;
             this.requestId = requestId;
             this.taskType = taskType;
             this.queueName = queueName;
             this.payloadSize = payloadSize;
             this.createdAtMs = createdAtMs;
+            this.async = async;
             this.status = "queued";
             this.modelRoute = "";
         }
 
-        static JobRecord queued(int numericId, RuntimeRequest request, String queueName, int payloadSize) {
-            return new JobRecord("job-" + numericId, request.requestId, request.taskType, queueName, payloadSize, System.currentTimeMillis());
+        static JobRecord queued(int numericId, RuntimeRequest request, String queueName, int payloadSize, boolean async) {
+            return new JobRecord("job-" + numericId, request.requestId, request.taskType, queueName, payloadSize, System.currentTimeMillis(), async);
+        }
+
+        void markRunning() {
+            this.status = "running";
         }
 
         void markFinished(String status, String modelRoute, int attempts, long durationMs, boolean cached, String errorCode, long queueWaitMs) {
             this.status = status;
-            this.modelRoute = modelRoute;
+            this.modelRoute = modelRoute == null ? "" : modelRoute;
             this.attempts = attempts;
             this.durationMs = durationMs;
             this.cached = cached;
@@ -744,8 +920,12 @@ public class Main {
             this.finishedAtMs = System.currentTimeMillis();
         }
 
+        boolean isCancelled() {
+            return "cancelled".equals(status);
+        }
+
         JobRecord copy() {
-            JobRecord copy = new JobRecord(jobId, requestId, taskType, queueName, payloadSize, createdAtMs);
+            JobRecord copy = new JobRecord(jobId, requestId, taskType, queueName, payloadSize, createdAtMs, async);
             copy.status = status;
             copy.modelRoute = modelRoute;
             copy.attempts = attempts;
@@ -754,6 +934,7 @@ public class Main {
             copy.errorCode = errorCode;
             copy.queueWaitMs = queueWaitMs;
             copy.finishedAtMs = finishedAtMs;
+            copy.lastResponseJson = lastResponseJson;
             return copy;
         }
 
@@ -764,6 +945,7 @@ public class Main {
                     "task_type", taskType,
                     "queue_name", queueName,
                     "status", status,
+                    "mode", async ? "async" : "sync",
                     "model_route", modelRoute,
                     "attempts", attempts,
                     "duration_ms", durationMs,
@@ -775,7 +957,6 @@ public class Main {
             );
         }
     }
-
 
     static String normalizeCacheKey(String rawBody) {
         if (rawBody == null) {
