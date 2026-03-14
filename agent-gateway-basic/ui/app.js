@@ -10,12 +10,12 @@ const routes = [
   { path: "/console/debug", label: "调试台", title: "调试工作台", description: "构造请求、查看契约转换、Trace 与 Replay。" },
 ];
 
-const consoleBuildVersion = "2026-03-14-debug-v7";
+const consoleBuildVersion = "2026-03-14-debug-v8";
 
 let viewDetails = null;
 
 async function getJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await fetch(url, { cache: "no-store", ...options });
   const text = await response.text();
   try {
     return JSON.parse(text);
