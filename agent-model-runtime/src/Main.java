@@ -799,10 +799,15 @@ public class Main {
                 + "Required fields:\n"
                 + "{\n"
                 + "  \"payment_terms_present\": true,\n"
+                + "  \"payment_terms_reason\": \"reason\",\n"
                 + "  \"breach_clause_present\": true,\n"
+                + "  \"breach_clause_reason\": \"reason\",\n"
                 + "  \"authorization_issue\": false,\n"
+                + "  \"authorization_issue_reason\": \"reason\",\n"
                 + "  \"deviation_detected\": false,\n"
+                + "  \"deviation_reason\": \"reason\",\n"
                 + "  \"risk_level\": \"low|medium|high\",\n"
+                + "  \"risk_reasons\": [\"reason1\", \"reason2\"],\n"
                 + "  \"review_summary\": \"Chinese summary\"\n"
                 + "}\n\n"
                 + "Original business prompt:\n"
@@ -820,10 +825,15 @@ public class Main {
             return false;
         }
         return trimmed.contains("\"payment_terms_present\"")
+                && trimmed.contains("\"payment_terms_reason\"")
                 && trimmed.contains("\"breach_clause_present\"")
+                && trimmed.contains("\"breach_clause_reason\"")
                 && trimmed.contains("\"authorization_issue\"")
+                && trimmed.contains("\"authorization_issue_reason\"")
                 && trimmed.contains("\"deviation_detected\"")
+                && trimmed.contains("\"deviation_reason\"")
                 && trimmed.contains("\"risk_level\"")
+                && trimmed.contains("\"risk_reasons\"")
                 && trimmed.contains("\"review_summary\"")
                 && !trimmed.contains("low|medium|high")
                 && !trimmed.contains("Chinese summary")
@@ -846,6 +856,34 @@ public class Main {
         boolean authorizationIssue = document.contains("\u6388\u6743") && (document.contains("\u4e0d\u5b8c\u6574") || document.contains("\u5f02\u5e38"));
         boolean deviationDetected = document.contains("\u504f\u79bb");
         String riskLevel = authorizationIssue ? "high" : (breachClausePresent || deviationDetected ? "medium" : "low");
+        String paymentTermsReason = paymentTermsPresent
+                ? "\u6587\u6863\u4e2d\u51fa\u73b0\u4ed8\u6b3e\u8282\u70b9\u3001\u6bd4\u4f8b\u6216\u652f\u4ed8\u6761\u4ef6\u7ebf\u7d22\u3002"
+                : "\u672a\u53d1\u73b0\u660e\u786e\u4ed8\u6b3e\u8282\u70b9\u3001\u6bd4\u4f8b\u6216\u652f\u4ed8\u6761\u4ef6\u63cf\u8ff0\u3002";
+        String breachClauseReason = breachClausePresent
+                ? "\u6587\u6863\u4e2d\u51fa\u73b0\u8fdd\u7ea6\u8d23\u4efb\u3001\u8fdd\u7ea6\u91d1\u6216\u5c65\u7ea6\u5904\u7f5a\u63cf\u8ff0\u3002"
+                : "\u672a\u53d1\u73b0\u660e\u786e\u7684\u8fdd\u7ea6\u8d23\u4efb\u6216\u8fdd\u7ea6\u5904\u7f5a\u63cf\u8ff0\u3002";
+        String authorizationIssueReason = authorizationIssue
+                ? "\u6587\u6863\u4e2d\u51fa\u73b0\u6388\u6743\u59d4\u6258\u4e0d\u5b8c\u6574\u6216\u6388\u6743\u94fe\u5f02\u5e38\u7ebf\u7d22\u3002"
+                : "\u672a\u53d1\u73b0\u660e\u786e\u7684\u6388\u6743\u94fe\u5f02\u5e38\u63cf\u8ff0\u3002";
+        String deviationReason = deviationDetected
+                ? "\u6587\u6863\u4e2d\u51fa\u73b0\u6280\u672f\u53c2\u6570\u6216\u5546\u52a1\u6761\u6b3e\u504f\u79bb\u63cf\u8ff0\u3002"
+                : "\u672a\u53d1\u73b0\u660e\u786e\u7684\u6280\u672f\u6216\u6761\u6b3e\u504f\u79bb\u4fe1\u606f\u3002";
+        List<String> riskReasons = new ArrayList<String>();
+        if (paymentTermsPresent) {
+            riskReasons.add("\u5b58\u5728\u4ed8\u6b3e\u6761\u6b3e\u7ebf\u7d22");
+        }
+        if (breachClausePresent) {
+            riskReasons.add("\u5b58\u5728\u8fdd\u7ea6\u6761\u6b3e\u7ebf\u7d22");
+        }
+        if (authorizationIssue) {
+            riskReasons.add("\u5b58\u5728\u6388\u6743\u94fe\u5f02\u5e38\u7ebf\u7d22");
+        }
+        if (deviationDetected) {
+            riskReasons.add("\u5b58\u5728\u6280\u672f\u6216\u6761\u6b3e\u504f\u79bb\u7ebf\u7d22");
+        }
+        if (riskReasons.isEmpty()) {
+            riskReasons.add("\u672a\u8bc6\u522b\u51fa\u660e\u786e\u98ce\u9669\u7ebf\u7d22\uff0c\u5efa\u8bae\u8865\u5145\u66f4\u5b8c\u6574\u6b63\u6587\u540e\u590d\u6838\u3002");
+        }
         String reviewSummary;
         if (paymentTermsPresent || breachClausePresent || authorizationIssue || deviationDetected) {
             reviewSummary = "\u6587\u6863\u5305\u542b\u90e8\u5206\u53ef\u8bc6\u522b\u7684\u4ed8\u6b3e\u3001\u8fdd\u7ea6\u3001\u6388\u6743\u6216\u504f\u79bb\u7ebf\u7d22\uff0c\u5efa\u8bae\u7ed3\u5408\u539f\u6587\u8fdb\u4e00\u6b65\u590d\u6838\u3002";
@@ -854,10 +892,15 @@ public class Main {
         }
         return jsonObject(mapOf(
                 "payment_terms_present", paymentTermsPresent,
+                "payment_terms_reason", paymentTermsReason,
                 "breach_clause_present", breachClausePresent,
+                "breach_clause_reason", breachClauseReason,
                 "authorization_issue", authorizationIssue,
+                "authorization_issue_reason", authorizationIssueReason,
                 "deviation_detected", deviationDetected,
+                "deviation_reason", deviationReason,
                 "risk_level", riskLevel,
+                "risk_reasons", rawJson(jsonArray(riskReasons)),
                 "review_summary", reviewSummary
         ));
     }

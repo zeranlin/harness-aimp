@@ -19,19 +19,29 @@ class StructuredExtractionCapability(BaseCapability):
             "输出格式：\n"
             "{\n"
             '  "payment_terms_present": true,\n'
+            '  "payment_terms_reason": "识别到付款比例、付款节点或支付条件描述。",\n'
             '  "breach_clause_present": true,\n'
+            '  "breach_clause_reason": "识别到违约责任、违约金或履约处罚描述。",\n'
             '  "authorization_issue": false,\n'
+            '  "authorization_issue_reason": "未发现授权链异常，或文档未出现授权委托不完整描述。",\n'
             '  "deviation_detected": false,\n'
+            '  "deviation_reason": "未发现明显技术参数或商务条款偏离描述。",\n'
             '  "risk_level": "low",\n'
+            '  "risk_reasons": ["风险判断依据 1", "风险判断依据 2"],\n'
             '  "review_summary": "中文摘要"\n'
             "}\n\n"
             "示例输出：\n"
             "{\n"
             '  "payment_terms_present": false,\n'
+            '  "payment_terms_reason": "文档未出现明确付款节点、比例或支付条件。",\n'
             '  "breach_clause_present": true,\n'
+            '  "breach_clause_reason": "文档出现违约责任或违约处罚描述。",\n'
             '  "authorization_issue": false,\n'
+            '  "authorization_issue_reason": "未发现授权链异常线索。",\n'
             '  "deviation_detected": true,\n'
+            '  "deviation_reason": "文档存在技术参数或条款偏离说明。",\n'
             '  "risk_level": "medium",\n'
+            '  "risk_reasons": ["存在违约责任条款", "存在技术或条款偏离说明"],\n'
             '  "review_summary": "文件存在违约责任和条款偏离描述，建议进一步复核。"\n'
             "}\n\n"
             "如果文档信息不足，也必须返回合法 JSON，并根据现有内容给出最接近的判断。\n\n"
@@ -59,21 +69,36 @@ class StructuredExtractionCapability(BaseCapability):
         deviation_detected = structured_payload.get("deviation_detected", ("偏离" in document))
         risk_level = structured_payload.get("risk_level") or ("high" if authorization_issue else "medium" if (breach_clause_present or deviation_detected) else "low")
         review_summary = structured_payload.get("review_summary", "")
+        payment_terms_reason = structured_payload.get("payment_terms_reason", "已根据文档内容判断是否存在付款条款。")
+        breach_clause_reason = structured_payload.get("breach_clause_reason", "已根据文档内容判断是否存在违约条款。")
+        authorization_issue_reason = structured_payload.get("authorization_issue_reason", "已根据文档内容判断是否存在授权链异常。")
+        deviation_reason = structured_payload.get("deviation_reason", "已根据文档内容判断是否存在技术或条款偏离。")
+        risk_reasons = structured_payload.get("risk_reasons", [])
         return {
             "fields": {
                 "document_length": len(document),
                 "risk_level": risk_level,
                 "payment_terms_present": payment_terms_present,
+                "payment_terms_reason": payment_terms_reason,
                 "breach_clause_present": breach_clause_present,
+                "breach_clause_reason": breach_clause_reason,
                 "authorization_issue": authorization_issue,
+                "authorization_issue_reason": authorization_issue_reason,
                 "deviation_detected": deviation_detected,
+                "deviation_reason": deviation_reason,
+                "risk_reasons": risk_reasons,
                 "review_summary": review_summary,
                 "extracted_fields": {
                     "payment_terms_present": payment_terms_present,
+                    "payment_terms_reason": payment_terms_reason,
                     "breach_clause_present": breach_clause_present,
+                    "breach_clause_reason": breach_clause_reason,
                     "authorization_issue": authorization_issue,
+                    "authorization_issue_reason": authorization_issue_reason,
                     "deviation_detected": deviation_detected,
+                    "deviation_reason": deviation_reason,
                     "risk_level": risk_level,
+                    "risk_reasons": risk_reasons,
                     "review_summary": review_summary,
                 },
             },
