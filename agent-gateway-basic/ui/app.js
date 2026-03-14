@@ -651,42 +651,46 @@ function normalizeDebugPayload(service, scenario, rawText) {
   return merged;
 }
 
+function newDebugRequestId(prefix) {
+  return `${prefix}-${Date.now()}`;
+}
+
 function debugTemplate(service, scenario) {
   if (service === "pricing") {
     return {
-      request_id: "req-ui-pricing-001",
+      request_id: newDebugRequestId("req-ui-pricing"),
       prompt: "请基于本次采购预算做价格校准，并说明异常报价风险与建议，输出简要摘要"
     };
   }
   if (service === "compliance") {
     return {
-      request_id: "req-ui-compliance-001",
+      request_id: newDebugRequestId("req-ui-compliance"),
       document: "供应商响应文件存在授权链不完整与条款偏离风险，请输出结构化审查结果。"
     };
   }
   if (scenario === "procurement_file_review") {
     return {
-      request_id: "req-ui-procurement-001",
+      request_id: newDebugRequestId("req-ui-procurement"),
       scenario_code: "procurement_file_review",
       file_content: "本文件主要描述项目背景、供应范围和实施安排，请补充抽取潜在价格风险、结构化字段和建议摘要。"
     };
   }
   if (scenario === "contract_review") {
     return {
-      request_id: "req-ui-contract-001",
+      request_id: newDebugRequestId("req-ui-contract"),
       scenario_code: "contract_review",
       contract_text: "甲乙双方签订采购合同，约定付款节点、违约责任和授权链要求，请给出合同审查摘要。"
     };
   }
   if (scenario === "compliance_review") {
     return {
-      request_id: "req-ui-l2-compliance-001",
+      request_id: newDebugRequestId("req-ui-l2-compliance"),
       scenario_code: "compliance_review",
       review_text: "请审查响应文件中的授权链完整性与条款偏离风险，并输出合规结论。"
     };
   }
   return {
-    request_id: "req-ui-qa-001",
+    request_id: newDebugRequestId("req-ui-qa"),
     scenario_code: "intelligent_qa",
     prompt: "采购评审里废标条款怎么判断？请给出结论和依据。"
   };
