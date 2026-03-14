@@ -51,15 +51,24 @@ class ProcurementFileReviewService:
                 dependency_calls.append({"service": "atomic-ai-engine", "capability_code": "structured_extraction", "status": "success", "uses_l4": True})
 
             duration_ms = int((time.time() - started_at) * 1000)
+            extraction_fields = (extraction_result or {}).get("result", {}).get("fields", {})
+            extracted_fields = extraction_fields.get("extracted_fields", {})
+            review_summary = extracted_fields.get("review_summary") or "已完成采购文件场景编排。先执行文件解析与规则引擎，未命中规则时再进入模型兜底。"
             result = {
-                "review_summary": "已完成采购文件场景编排。先执行文件解析与规则引擎，未命中规则时再进入模型兜底。",
+                "review_summary": review_summary,
                 "parsed_document_type": parsed.get("result", {}).get("document_type", "unknown"),
                 "rule_matched": matched,
                 "matched_rules": rule_result.get("result", {}).get("matched_rules", []),
                 "fallback_used": fallback_used,
-                "risk_level": (extraction_result or {}).get("result", {}).get("fields", {}).get("risk_level", "low" if matched else "unknown"),
+                "risk_level": extraction_fields.get("risk_level", "low" if matched else "unknown"),
                 "model_route": (extraction_result or {}).get("result", {}).get("model_route"),
                 "evidence_count": evidence.get("result", {}).get("count", 0),
+                "payment_terms_present": extracted_fields.get("payment_terms_present"),
+                "breach_clause_present": extracted_fields.get("breach_clause_present"),
+                "authorization_issue": extracted_fields.get("authorization_issue"),
+                "deviation_detected": extracted_fields.get("deviation_detected"),
+                "structured_result": extracted_fields if extracted_fields else {},
+                "model_structure_error": (extraction_result or {}).get("result", {}).get("model_structure_error", ""),
             }
             response = {
                 "request_id": request_id,
