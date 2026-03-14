@@ -210,6 +210,9 @@ async function renderDebug() {
       ${card("Qwen 命中", "-")}
       ${card("问题层级", "-")}
     </div>
+    <div id="debug-model-summary" style="margin-top:16px;">
+      ${sectionCard("大模型返回摘要", "发送一次完整链路调试请求后，这里会直接显示 Qwen 的返回摘要。")}
+    </div>
     <div class="split" style="margin-top:16px;">
       <div class="stack">
         <div class="field"><label>调试链路</label><select id="service"><option value="qa">L1 -> L2 -> L3 -> L4</option><option value="compliance">L1 -> L3</option><option value="pricing">L1 -> L4</option></select></div>
@@ -531,17 +534,34 @@ function detectBrokenLayer(tracePayload = {}) {
 
 function renderDebugSummary(tracePayload = {}) {
   const node = document.getElementById("debug-summary");
+  const modelNode = document.getElementById("debug-model-summary");
   if (!node) return;
   const summary = tracePayload.summary || {};
   const chainOk = summary.complete_chain === true || tracePayload.status === "ok";
   const qwenHit = summary.hit_qwen35_27b === true;
   const brokenLayer = detectBrokenLayer(tracePayload);
+  const runtimeItems = (((tracePayload || {}).l4_runtime || {}).items) || [];
+  const modelResult = runtimeItems[0] || {};
+  const modelSummary = modelResult.result_summary || "当前没有可展示的大模型返回摘要。";
+  const modelMeta = [
+    modelResult.execution_mode ? `执行方式：${modelResult.execution_mode}` : "",
+    modelResult.provider ? `提供方：${modelResult.provider}` : "",
+    modelResult.endpoint ? `端点：${modelResult.endpoint}` : "",
+    modelResult.model_route ? `模型路由：${modelResult.model_route}` : "",
+  ].filter(Boolean).join("<br/>");
   node.innerHTML = `
     ${card("链路状态", chainOk ? "成功" : "待检查", chainOk ? "good" : "warn")}
     ${card("目标契约", summary.target_contract || "-")}
     ${card("Qwen 命中", qwenHit ? "已命中" : "未命中", qwenHit ? "good" : "")}
     ${card("问题层级", brokenLayer, brokenLayer !== "-" ? "bad" : "")}
   `;
+  if (modelNode) {
+    modelNode.innerHTML = sectionCard(
+      "大模型返回摘要",
+      `${modelSummary}${modelMeta ? `<br/><br/>${modelMeta}` : ""}`,
+      qwenHit ? "good" : ""
+    );
+  }
 }
 
 function safeParseJson(text) {
