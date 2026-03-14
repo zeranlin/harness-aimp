@@ -10,6 +10,8 @@ const routes = [
   { path: "/console/debug", label: "调试台", title: "调试工作台", description: "构造请求、查看契约转换、Trace 与 Replay。" },
 ];
 
+const consoleBuildVersion = "2026-03-14-debug-v1";
+
 let viewDetails = null;
 
 async function getJson(url, options = {}) {
@@ -204,6 +206,11 @@ async function renderGateway() {
 async function renderDebug() {
   return `
     <div class="toolbar"><h2>完整链路调试</h2><div></div></div>
+    <div class="card" style="margin-top:16px;">
+      <div class="label">前端版本</div>
+      <div style="margin-top:8px;font-weight:700;">${consoleBuildVersion}</div>
+      <div style="margin-top:6px;color:var(--muted);">如果这里不是最新版本，请先执行浏览器强制刷新。</div>
+    </div>
     <div id="debug-summary" class="grid stats" style="margin-top:16px;">
       ${card("链路状态", "待执行")}
       ${card("目标契约", "-")}
