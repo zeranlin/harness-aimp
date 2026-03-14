@@ -32,10 +32,27 @@ start_service() {
 
   echo "[start] $name on $port"
   rm -f "$pid_file"
-  nohup sh -c "$command" </dev/null >"$log_file" 2>&1 &
-  local pid=$!
-  echo "$pid" >"$pid_file"
-  disown "$pid" 2>/dev/null || true
+  ROOT="$ROOT" COMMAND="$command" LOG_FILE="$log_file" PID_FILE="$pid_file" python3 - <<'PY'
+import os
+import subprocess
+
+command = os.environ["COMMAND"]
+log_file = os.environ["LOG_FILE"]
+pid_file = os.environ["PID_FILE"]
+
+with open(log_file, "ab") as log:
+    process = subprocess.Popen(
+        ["sh", "-lc", command],
+        stdin=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        close_fds=True,
+    )
+
+with open(pid_file, "w", encoding="utf-8") as fh:
+    fh.write(str(process.pid))
+PY
 }
 
 wait_for_service() {
