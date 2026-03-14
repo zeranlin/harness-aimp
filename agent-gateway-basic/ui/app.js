@@ -10,7 +10,7 @@ const routes = [
   { path: "/console/debug", label: "调试台", title: "调试工作台", description: "构造请求、查看契约转换、Trace 与 Replay。" },
 ];
 
-const consoleBuildVersion = "2026-03-14-debug-v4";
+const consoleBuildVersion = "2026-03-14-debug-v5";
 
 let viewDetails = null;
 
@@ -66,7 +66,7 @@ function card(label, value, tone = "") {
 }
 
 function sectionCard(title, body, tone = "") {
-  return `<div class="card ${tone}"><div class="label">${title}</div><div style="margin-top:8px;color:var(--muted);line-height:1.55;">${body}</div></div>`;
+  return `<div class="card ${tone}"><div class="label">${title}</div><div class="card-body">${body}</div></div>`;
 }
 
 function table(headers, rows, options = {}) {
@@ -627,11 +627,7 @@ function decodeEscapedUnicode(text) {
   if (!text || text.indexOf("\\u") === -1) {
     return String(text || "");
   }
-  try {
-    return JSON.parse(`"${String(text).replace(/\\\\/g, "\\\\\\\\").replace(/"/g, '\\"')}"`);
-  } catch (error) {
-    return String(text || "");
-  }
+  return String(text || "").replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
 function shortModelOutput(text, qwenHit) {
