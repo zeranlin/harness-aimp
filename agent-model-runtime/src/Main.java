@@ -739,8 +739,12 @@ public class Main {
         String text = extractJsonString(response, "text");
         String summary = !content.isEmpty() ? content : !reasoning.isEmpty() ? reasoning : !text.isEmpty() ? text : "remote model call completed";
         summary = summary.replace("\n", " ").trim();
+        String structuredJson = extractJsonObject(summary);
+        boolean structuredOk = structuredJson != null && structuredJson.trim().startsWith("{") && structuredJson.trim().length() > 2;
         return mapOf(
                 "summary", summary,
+                "structured_result", structuredJson,
+                "structure_error", structuredOk ? "" : "MODEL_OUTPUT_NOT_STRUCTURED",
                 "task_type", request.taskType,
                 "risk_level", inferRiskLevel(request.rawBody),
                 "attempt", 1,
@@ -775,6 +779,29 @@ public class Main {
             return "medium";
         }
         return "low";
+    }
+
+    static String extractJsonObject(String text) {
+        if (text == null || text.trim().isEmpty()) {
+            return "{}";
+        }
+        int start = text.indexOf('{');
+        if (start < 0) {
+            return "{}";
+        }
+        int depth = 0;
+        for (int i = start; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '{') {
+                depth += 1;
+            } else if (c == '}') {
+                depth -= 1;
+                if (depth == 0) {
+                    return text.substring(start, i + 1);
+                }
+            }
+        }
+        return "{}";
     }
 
     static class RuntimeRequest {
@@ -1051,6 +1078,8 @@ public class Main {
         String endpoint = "";
         String requestPromptPreview = "";
         String requestPromptFull = "";
+        String structuredResultJson = "{}";
+        String structureError = "";
 
         JobRecord(String jobId, String requestId, String taskType, String queueName, int payloadSize, long createdAtMs, boolean async) {
             this.jobId = jobId;
@@ -1104,6 +1133,8 @@ public class Main {
             copy.endpoint = endpoint;
             copy.requestPromptPreview = requestPromptPreview;
             copy.requestPromptFull = requestPromptFull;
+            copy.structuredResultJson = structuredResultJson;
+            copy.structureError = structureError;
             return copy;
         }
 
@@ -1126,6 +1157,8 @@ public class Main {
                     "endpoint", endpoint,
                     "request_prompt_preview", requestPromptPreview,
                     "request_prompt_full", requestPromptFull,
+                    "structured_result_json", structuredResultJson == null || structuredResultJson.isEmpty() ? "{}" : structuredResultJson,
+                    "structure_error", structureError,
                     "queue_wait_ms", queueWaitMs,
                     "created_at", Instant.ofEpochMilli(createdAtMs).toString(),
                     "finished_at", finishedAtMs > 0 ? Instant.ofEpochMilli(finishedAtMs).toString() : ""
@@ -1142,6 +1175,8 @@ public class Main {
             endpoint = stringValue(result.get("endpoint"));
             requestPromptPreview = stringValue(result.get("request_prompt_preview"));
             requestPromptFull = stringValue(result.get("request_prompt_full"));
+            structuredResultJson = stringValue(result.get("structured_result"));
+            structureError = stringValue(result.get("structure_error"));
         }
     }
 

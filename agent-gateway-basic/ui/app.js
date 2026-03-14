@@ -10,7 +10,7 @@ const routes = [
   { path: "/console/debug", label: "调试台", title: "调试工作台", description: "构造请求、查看契约转换、Trace 与 Replay。" },
 ];
 
-const consoleBuildVersion = "2026-03-14-debug-v5";
+const consoleBuildVersion = "2026-03-14-debug-v7";
 
 let viewDetails = null;
 
@@ -225,6 +225,9 @@ async function renderDebug() {
     </div>
     <div id="debug-model-prompt" style="margin-top:16px;">
       ${sectionCard("发送给大模型的业务提示", "发送一次完整链路调试请求后，这里会显示真正发给大模型的业务提示内容。")}
+    </div>
+    <div id="debug-model-structured" style="margin-top:16px;">
+      ${sectionCard("解析后的结构化结果", "发送一次完整链路调试请求后，这里会显示从模型返回中提取出的结构化 JSON。")}
     </div>
     <div id="debug-model-full" style="margin-top:16px;"></div>
     <div class="split" style="margin-top:16px;">
@@ -551,6 +554,7 @@ function renderDebugSummary(tracePayload = {}) {
   const modelNode = document.getElementById("debug-model-summary");
   const proofNode = document.getElementById("debug-model-proof");
   const promptNode = document.getElementById("debug-model-prompt");
+  const structuredNode = document.getElementById("debug-model-structured");
   const modelFullNode = document.getElementById("debug-model-full");
   if (!node) return;
   const summary = tracePayload.summary || {};
@@ -564,6 +568,8 @@ function renderDebugSummary(tracePayload = {}) {
   const shortModelSummary = shortModelOutput(normalizedModelSummary, qwenHit);
   const promptPreview = normalizeModelOutput(modelResult.request_prompt_preview || "");
   const promptFull = normalizeModelOutput(modelResult.request_prompt_full || "");
+  const structuredResult = parseStructuredResult(modelResult.structured_result_json || modelResult.structured_result);
+  const structureError = modelResult.structure_error || "";
   const modelMeta = [
     modelResult.execution_mode ? `执行方式：${modelResult.execution_mode}` : "",
     modelResult.provider ? `提供方：${modelResult.provider}` : "",
@@ -600,6 +606,13 @@ function renderDebugSummary(tracePayload = {}) {
       "发送给大模型的业务提示",
       promptPreview || "当前还没有可展示的业务提示内容。",
       qwenHit ? "good" : ""
+    );
+  }
+  if (structuredNode) {
+    structuredNode.innerHTML = sectionCard(
+      "解析后的结构化结果",
+      `${structureError ? `<div style="margin-bottom:8px;color:#9d3e35;font-weight:600;">解析状态：${structureError}</div>` : ""}<pre>${escapeHtml(pretty(structuredResult && Object.keys(structuredResult).length ? structuredResult : { status: "empty", message: "当前未解析出结构化 JSON" }))}</pre>`,
+      structureError ? "warn" : (qwenHit ? "good" : "")
     );
   }
   if (modelFullNode) {
@@ -679,6 +692,13 @@ function safeParseJson(text) {
   }
 }
 
+function parseStructuredResult(value) {
+  if (!value) return {};
+  if (typeof value === "object") return value;
+  const parsed = safeParseJson(String(value));
+  return parsed && typeof parsed === "object" ? parsed : {};
+}
+
 function normalizeDebugPayload(service, scenario, rawText) {
   const template = debugTemplate(service, scenario);
   const parsed = safeParseJson(rawText);
@@ -734,7 +754,7 @@ function debugTemplate(service, scenario) {
     return {
       request_id: newDebugRequestId("req-ui-procurement"),
       scenario_code: "procurement_file_review",
-      file_content: "本文件主要描述项目背景、供应范围和实施安排，请补充抽取潜在价格风险、结构化字段和建议摘要。"
+      file_content: "本项目采购文件约定：合同签订后30日内支付合同金额的40%，项目验收通过后支付50%，质保期满后支付10%。供应商如延迟履约，每延迟一日按合同金额的0.5%承担违约责任。投标文件授权委托书链路不完整，部分技术参数与招标要求存在偏离说明。请输出结构化审查结论。"
     };
   }
   if (scenario === "contract_review") {

@@ -8,14 +8,32 @@ class StructuredExtractionCapability(BaseCapability):
     def build_model_payload(self, request_id, payload, context=None, options=None):
         document = str(payload.get("document") or payload.get("text") or "")
         prompt = (
-            "你是采购与合规审查助手。请基于下面的文档内容，输出结构化审查结论。\n"
-            "请重点判断并总结：\n"
-            "1. 是否存在付款条款\n"
-            "2. 是否存在违约条款\n"
-            "3. 是否存在授权链异常\n"
-            "4. 是否存在技术或条款偏离\n"
-            "5. 综合风险等级（low/medium/high）\n"
-            "6. 给出一段简短的中文审查摘要\n\n"
+            "你是采购与合规审查助手。请基于下面的文档内容，输出结构化审查结论。\n\n"
+            "请严格遵守以下要求：\n"
+            "1. 只输出 JSON\n"
+            "2. 不要输出 Thinking Process\n"
+            "3. 不要输出解释说明\n"
+            "4. 不要输出 Markdown\n"
+            "5. 所有字段必须完整\n\n"
+            "输出格式：\n"
+            "{\n"
+            '  "payment_terms_present": true,\n'
+            '  "breach_clause_present": true,\n'
+            '  "authorization_issue": false,\n'
+            '  "deviation_detected": false,\n'
+            '  "risk_level": "low",\n'
+            '  "review_summary": "中文摘要"\n'
+            "}\n\n"
+            "示例输出：\n"
+            "{\n"
+            '  "payment_terms_present": false,\n'
+            '  "breach_clause_present": true,\n'
+            '  "authorization_issue": false,\n'
+            '  "deviation_detected": true,\n'
+            '  "risk_level": "medium",\n'
+            '  "review_summary": "文件存在违约责任和条款偏离描述，建议进一步复核。"\n'
+            "}\n\n"
+            "如果文档信息不足，也必须返回合法 JSON，并根据现有内容给出最接近的判断。\n\n"
             "文档内容：\n"
             f"{document}"
         )
