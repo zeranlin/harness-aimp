@@ -10,7 +10,7 @@ const routes = [
   { path: "/console/debug", label: "调试台", title: "调试工作台", description: "构造请求、查看契约转换、Trace 与 Replay。" },
 ];
 
-const consoleBuildVersion = "2026-03-14-debug-v1";
+const consoleBuildVersion = "2026-03-14-debug-v2";
 
 let viewDetails = null;
 
@@ -219,6 +219,9 @@ async function renderDebug() {
     </div>
     <div id="debug-model-summary" style="margin-top:16px;">
       ${sectionCard("大模型返回摘要", "发送一次完整链路调试请求后，这里会直接显示 Qwen 的返回摘要。")}
+    </div>
+    <div id="debug-model-proof" style="margin-top:16px;">
+      ${sectionCard("大模型调用证据", "这里会显示是否进入远程模型执行，以及对应的 provider、endpoint 和 runtime 作业数。")}
     </div>
     <div id="debug-model-full" style="margin-top:16px;"></div>
     <div class="split" style="margin-top:16px;">
@@ -543,6 +546,7 @@ function detectBrokenLayer(tracePayload = {}) {
 function renderDebugSummary(tracePayload = {}) {
   const node = document.getElementById("debug-summary");
   const modelNode = document.getElementById("debug-model-summary");
+  const proofNode = document.getElementById("debug-model-proof");
   const modelFullNode = document.getElementById("debug-model-full");
   if (!node) return;
   const summary = tracePayload.summary || {};
@@ -573,11 +577,24 @@ function renderDebugSummary(tracePayload = {}) {
       qwenHit ? "good" : ""
     );
   }
+  if (proofNode) {
+    proofNode.innerHTML = sectionCard(
+      "大模型调用证据",
+      `${qwenHit ? "已确认进入远程大模型执行。" : "当前未确认进入远程大模型执行。"}<br/><br/>` +
+      `runtime 作业数：${runtimeItems.length}<br/>` +
+      `执行方式：${modelResult.execution_mode || "-"}<br/>` +
+      `提供方：${modelResult.provider || "-"}<br/>` +
+      `端点：${modelResult.endpoint || "-"}<br/>` +
+      `模型路由：${modelResult.model_route || "-"}`,
+      qwenHit ? "good" : "warn"
+    );
+  }
   if (modelFullNode) {
     modelFullNode.innerHTML = normalizedModelSummary && normalizedModelSummary !== "当前没有可展示的大模型返回摘要。"
       ? `<div style="display:none" id="model-full-panel"><div class="label">完整模型返回</div><pre id="model-full-content">${escapeHtml(normalizedModelSummary)}</pre></div>`
       : "";
   }
+  bindModelSummaryToggle();
 }
 
 function normalizeModelOutput(text) {
@@ -607,6 +624,19 @@ function escapeHtml(text) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+function bindModelSummaryToggle() {
+  const toggleModelFull = document.getElementById("toggle-model-full");
+  if (!toggleModelFull || toggleModelFull.dataset.bound === "true") return;
+  toggleModelFull.dataset.bound = "true";
+  toggleModelFull.addEventListener("click", () => {
+    const panel = document.getElementById("model-full-panel");
+    if (!panel) return;
+    const visible = panel.style.display !== "none";
+    panel.style.display = visible ? "none" : "block";
+    toggleModelFull.textContent = visible ? "查看完整模型返回" : "收起完整模型返回";
+  });
 }
 
 function safeParseJson(text) {
@@ -737,16 +767,7 @@ function bindInteractions() {
   if (trace) trace.addEventListener("click", loadTrace);
   const replay = document.getElementById("replay-trace");
   if (replay) replay.addEventListener("click", replayTrace);
-  const toggleModelFull = document.getElementById("toggle-model-full");
-  if (toggleModelFull) {
-    toggleModelFull.addEventListener("click", () => {
-      const panel = document.getElementById("model-full-panel");
-      if (!panel) return;
-      const visible = panel.style.display !== "none";
-      panel.style.display = visible ? "none" : "block";
-      toggleModelFull.textContent = visible ? "查看完整模型返回" : "收起完整模型返回";
-    });
-  }
+  bindModelSummaryToggle();
   const refreshers = {
     "refresh-dashboard": "/console/dashboard",
     "refresh-gateway": "/console/gateway",

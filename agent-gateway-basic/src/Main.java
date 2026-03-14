@@ -680,11 +680,21 @@ public class Main {
                         "service", service
                 ));
             }
+            Map<String, String> debugHeaders = new LinkedHashMap<String, String>(request.headers);
+            if (!debugHeaders.containsKey("x-api-key") || debugHeaders.get("x-api-key").trim().isEmpty()) {
+                debugHeaders.put("x-api-key", "demo-key-ops");
+            }
+            if (!debugHeaders.containsKey("x-tenant-id") || debugHeaders.get("x-tenant-id").trim().isEmpty()) {
+                debugHeaders.put("x-tenant-id", "demo");
+            }
+            if (!debugHeaders.containsKey("x-operator-id") || debugHeaders.get("x-operator-id").trim().isEmpty()) {
+                debugHeaders.put("x-operator-id", "operator-1");
+            }
             GatewayRequest invokeRequest = new GatewayRequest(
                     "POST",
                     "/gateway/v1/invoke",
                     stringMapOf("service", service),
-                    request.headers,
+                    debugHeaders,
                     request.body
             );
             String transformedPayload = buildUpstreamPayload(route, invokeRequest);
@@ -1364,6 +1374,9 @@ public class Main {
             scenarioCode = "intelligent_qa";
         }
         String fileContent = extractJsonString(request.body, "file_content");
+        if (fileContent.isEmpty()) {
+            fileContent = extractJsonString(request.body, "document_text");
+        }
         if (fileContent.isEmpty()) {
             fileContent = extractJsonString(request.body, "document");
         }
