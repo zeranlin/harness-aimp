@@ -1,4 +1,5 @@
 from atomic_ai_engine.base import BaseCapability
+import json
 
 class StructuredExtractionCapability(BaseCapability):
     capability_code = "structured_extraction"
@@ -46,11 +47,18 @@ class StructuredExtractionCapability(BaseCapability):
 
     def build_result(self, payload, model_response=None):
         document = str(payload.get("document") or payload.get("text") or "")
-        payment_terms_present = "付款" in document
-        breach_clause_present = "违约" in document
-        authorization_issue = "授权" in document and "不完整" in document
-        deviation_detected = "偏离" in document
-        risk_level = "high" if authorization_issue else "medium" if (breach_clause_present or deviation_detected) else "low"
+        runtime_result = ((model_response or {}).get("result") or {}) if isinstance(model_response, dict) else {}
+        structured_json = runtime_result.get("structured_result_json") or runtime_result.get("structured_result") or "{}"
+        try:
+            structured_payload = json.loads(structured_json) if isinstance(structured_json, str) else (structured_json or {})
+        except json.JSONDecodeError:
+            structured_payload = {}
+        payment_terms_present = structured_payload.get("payment_terms_present", "付款" in document)
+        breach_clause_present = structured_payload.get("breach_clause_present", "违约" in document)
+        authorization_issue = structured_payload.get("authorization_issue", ("授权" in document and "不完整" in document))
+        deviation_detected = structured_payload.get("deviation_detected", ("偏离" in document))
+        risk_level = structured_payload.get("risk_level") or ("high" if authorization_issue else "medium" if (breach_clause_present or deviation_detected) else "low")
+        review_summary = structured_payload.get("review_summary", "")
         return {
             "fields": {
                 "document_length": len(document),
@@ -59,12 +67,16 @@ class StructuredExtractionCapability(BaseCapability):
                 "breach_clause_present": breach_clause_present,
                 "authorization_issue": authorization_issue,
                 "deviation_detected": deviation_detected,
+                "review_summary": review_summary,
                 "extracted_fields": {
                     "payment_terms_present": payment_terms_present,
                     "breach_clause_present": breach_clause_present,
                     "authorization_issue": authorization_issue,
                     "deviation_detected": deviation_detected,
+                    "risk_level": risk_level,
+                    "review_summary": review_summary,
                 },
             },
             "model_route": (model_response or {}).get("model_route", "general-llm-v1"),
+            "model_structure_error": runtime_result.get("structure_error", ""),
         }

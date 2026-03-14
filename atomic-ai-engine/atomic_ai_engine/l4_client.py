@@ -15,7 +15,7 @@ class ModelRuntimeClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=3) as resp:
+            with urllib.request.urlopen(req, timeout=15) as resp:
                 return resp.status, json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             text = exc.read().decode("utf-8") or "{}"

@@ -10,7 +10,7 @@ const routes = [
   { path: "/console/debug", label: "调试台", title: "调试工作台", description: "构造请求、查看契约转换、Trace 与 Replay。" },
 ];
 
-const consoleBuildVersion = "2026-03-14-debug-v8";
+const consoleBuildVersion = "2026-03-14-debug-v9";
 
 let viewDetails = null;
 
@@ -564,6 +564,7 @@ function renderDebugSummary(tracePayload = {}) {
   const runtimeItems = (((tracePayload || {}).l4_runtime || {}).items) || [];
   const modelResult = runtimeItems[0] || {};
   const modelSummary = modelResult.result_summary || "当前没有可展示的大模型返回摘要。";
+  const normalizedSummary = normalizeModelOutput(modelResult.normalized_summary || "");
   const normalizedModelSummary = normalizeModelOutput(modelSummary);
   const shortModelSummary = shortModelOutput(normalizedModelSummary, qwenHit);
   const promptPreview = normalizeModelOutput(modelResult.request_prompt_preview || "");
@@ -611,7 +612,7 @@ function renderDebugSummary(tracePayload = {}) {
   if (structuredNode) {
     structuredNode.innerHTML = sectionCard(
       "解析后的结构化结果",
-      `${structureError ? `<div style="margin-bottom:8px;color:#9d3e35;font-weight:600;">解析状态：${structureError}</div>` : ""}<pre>${escapeHtml(pretty(structuredResult && Object.keys(structuredResult).length ? structuredResult : { status: "empty", message: "当前未解析出结构化 JSON" }))}</pre>`,
+      `${modelResult.normalization_applied ? `<div style="margin-bottom:8px;color:#607436;font-weight:600;">运行时已执行二次 JSON 整理。</div>` : ""}${structureError ? `<div style="margin-bottom:8px;color:#9d3e35;font-weight:600;">解析状态：${structureError}</div>` : ""}<pre>${escapeHtml(pretty(structuredResult && Object.keys(structuredResult).length ? structuredResult : { status: "empty", message: "当前未解析出结构化 JSON" }))}</pre>${normalizedSummary ? `<div class="label" style="margin-top:12px;">二次整理返回</div><pre>${escapeHtml(normalizedSummary)}</pre>` : ""}`,
       structureError ? "warn" : (qwenHit ? "good" : "")
     );
   }

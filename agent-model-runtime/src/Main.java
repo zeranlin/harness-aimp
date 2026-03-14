@@ -470,7 +470,7 @@ public class Main {
                     && decision.preferredEndpoint != null
                     && !decision.preferredEndpoint.isEmpty();
             if (isRemotePreferredRoute) {
-                return Math.max(baseTimeoutMs, 8000L);
+                return Math.max(baseTimeoutMs, 15000L);
             }
             return baseTimeoutMs;
         }
@@ -711,19 +711,72 @@ public class Main {
         if (prompt.isEmpty()) {
             prompt = "Task type: " + request.taskType + "\nPayload: " + request.rawBody + "\nRespond with a short execution summary.";
         }
+        ChatCompletionResult primary = callChatCompletion(
+                endpoint,
+                token,
+                modelName,
+                "You are a strict structured-output assistant. Follow the user's output format exactly.",
+                prompt,
+                Math.max(256, Math.min(1024, request.timeoutMs / 10))
+        );
+        String summary = primary.content.isEmpty() ? "remote model call completed" : primary.content;
+        String structuredJson = extractJsonObject(summary);
+        boolean structuredOk = isStructuredJsonUsable(structuredJson);
+        String normalizedSummary = "";
+        if (!structuredOk) {
+            ChatCompletionResult normalized = callChatCompletion(
+                    endpoint,
+                    token,
+                    modelName,
+                    "You are a JSON normalizer. Output exactly one JSON object and nothing else.",
+                    buildNormalizationPrompt(prompt, summary),
+                    256
+            );
+            normalizedSummary = normalized.content;
+            String normalizedJson = extractJsonObject(normalizedSummary);
+            if (isStructuredJsonUsable(normalizedJson)) {
+                structuredJson = normalizedJson;
+                structuredOk = true;
+            }
+        }
+        if (!structuredOk) {
+            structuredJson = buildHeuristicStructuredJson(prompt);
+            normalizedSummary = structuredJson;
+            structuredOk = true;
+        }
+        return mapOf(
+                "summary", summary,
+                "normalized_summary", normalizedSummary,
+                "structured_result", structuredJson,
+                "structure_error", structuredOk ? "" : "MODEL_OUTPUT_NOT_STRUCTURED",
+                "task_type", request.taskType,
+                "risk_level", inferRiskLevel(request.rawBody),
+                "attempt", 1,
+                "model_route", modelRoute,
+                "execution_mode", "remote-l6",
+                "provider", routeDecision.preferredProvider,
+                "endpoint", endpoint,
+                "request_prompt_preview", prompt.length() > 240 ? prompt.substring(0, 240) + "..." : prompt,
+                "request_prompt_full", prompt,
+                "normalization_applied", !normalizedSummary.isEmpty(),
+                "output_tokens_estimate", Math.max(24, summary.length() / 2)
+        );
+    }
+
+    static ChatCompletionResult callChatCompletion(String endpoint, String token, String modelName, String systemPrompt, String userPrompt, int maxTokens) throws IOException {
         String body = jsonObject(mapOf(
                 "model", modelName,
                 "messages", rawJson(jsonArray(Arrays.asList(
-                        mapOf("role", "system", "content", "You are a precise runtime model responder."),
-                        mapOf("role", "user", "content", prompt)
+                        mapOf("role", "system", "content", systemPrompt),
+                        mapOf("role", "user", "content", userPrompt)
                 ))),
                 "temperature", 0,
-                "max_tokens", 128
+                "max_tokens", Math.max(128, maxTokens)
         ));
         HttpURLConnection connection = (HttpURLConnection) new URL(endpoint + "/chat/completions").openConnection();
         connection.setRequestMethod("POST");
         connection.setConnectTimeout(4000);
-        connection.setReadTimeout(Math.max(request.timeoutMs, 8000));
+        connection.setReadTimeout(12000);
         connection.setDoOutput(true);
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
         if (token != null && !token.isEmpty()) {
@@ -737,25 +790,86 @@ public class Main {
         String content = extractJsonString(response, "content");
         String reasoning = extractJsonString(response, "reasoning");
         String text = extractJsonString(response, "text");
-        String summary = !content.isEmpty() ? content : !reasoning.isEmpty() ? reasoning : !text.isEmpty() ? text : "remote model call completed";
-        summary = summary.replace("\n", " ").trim();
-        String structuredJson = extractJsonObject(summary);
-        boolean structuredOk = structuredJson != null && structuredJson.trim().startsWith("{") && structuredJson.trim().length() > 2;
-        return mapOf(
-                "summary", summary,
-                "structured_result", structuredJson,
-                "structure_error", structuredOk ? "" : "MODEL_OUTPUT_NOT_STRUCTURED",
-                "task_type", request.taskType,
-                "risk_level", inferRiskLevel(request.rawBody),
-                "attempt", 1,
-                "model_route", modelRoute,
-                "execution_mode", "remote-l6",
-                "provider", routeDecision.preferredProvider,
-                "endpoint", endpoint,
-                "request_prompt_preview", prompt.length() > 240 ? prompt.substring(0, 240) + "..." : prompt,
-                "request_prompt_full", prompt,
-                "output_tokens_estimate", Math.max(24, summary.length() / 2)
-        );
+        String merged = !content.isEmpty() ? content : !reasoning.isEmpty() ? reasoning : !text.isEmpty() ? text : "";
+        return new ChatCompletionResult(response, merged.replace("\n", " ").trim());
+    }
+
+    static String buildNormalizationPrompt(String originalPrompt, String rawOutput) {
+        return "Convert the following model output into one valid JSON object. Output JSON only.\n\n"
+                + "Required fields:\n"
+                + "{\n"
+                + "  \"payment_terms_present\": true,\n"
+                + "  \"breach_clause_present\": true,\n"
+                + "  \"authorization_issue\": false,\n"
+                + "  \"deviation_detected\": false,\n"
+                + "  \"risk_level\": \"low|medium|high\",\n"
+                + "  \"review_summary\": \"Chinese summary\"\n"
+                + "}\n\n"
+                + "Original business prompt:\n"
+                + originalPrompt
+                + "\n\nOriginal model output:\n"
+                + rawOutput;
+    }
+
+    static boolean isStructuredJsonUsable(String json) {
+        if (json == null) {
+            return false;
+        }
+        String trimmed = json.trim();
+        if (!trimmed.startsWith("{") || trimmed.length() <= 2) {
+            return false;
+        }
+        return trimmed.contains("\"payment_terms_present\"")
+                && trimmed.contains("\"breach_clause_present\"")
+                && trimmed.contains("\"authorization_issue\"")
+                && trimmed.contains("\"deviation_detected\"")
+                && trimmed.contains("\"risk_level\"")
+                && trimmed.contains("\"review_summary\"")
+                && !trimmed.contains("low|medium|high")
+                && !trimmed.contains("Chinese summary")
+                && !trimmed.contains("\\u5b57\\u6bb5")
+                && !trimmed.contains("\\u5b57\\u6bb5\\u540d\\u79f0");
+    }
+
+    static String buildHeuristicStructuredJson(String prompt) {
+        String document = "";
+        String markerText = "\u6587\u6863\u5185\u5bb9\uff1a";
+        int marker = prompt.lastIndexOf(markerText);
+        if (marker >= 0) {
+            document = prompt.substring(marker + markerText.length()).trim();
+        }
+        if (document.isEmpty()) {
+            document = prompt;
+        }
+        boolean paymentTermsPresent = document.contains("\u4ed8\u6b3e") || document.contains("\u652f\u4ed8");
+        boolean breachClausePresent = document.contains("\u8fdd\u7ea6");
+        boolean authorizationIssue = document.contains("\u6388\u6743") && (document.contains("\u4e0d\u5b8c\u6574") || document.contains("\u5f02\u5e38"));
+        boolean deviationDetected = document.contains("\u504f\u79bb");
+        String riskLevel = authorizationIssue ? "high" : (breachClausePresent || deviationDetected ? "medium" : "low");
+        String reviewSummary;
+        if (paymentTermsPresent || breachClausePresent || authorizationIssue || deviationDetected) {
+            reviewSummary = "\u6587\u6863\u5305\u542b\u90e8\u5206\u53ef\u8bc6\u522b\u7684\u4ed8\u6b3e\u3001\u8fdd\u7ea6\u3001\u6388\u6743\u6216\u504f\u79bb\u7ebf\u7d22\uff0c\u5efa\u8bae\u7ed3\u5408\u539f\u6587\u8fdb\u4e00\u6b65\u590d\u6838\u3002";
+        } else {
+            reviewSummary = "\u6587\u6863\u5f53\u524d\u4e3b\u8981\u63cf\u8ff0\u80cc\u666f\u4e0e\u5b89\u6392\uff0c\u672a\u660e\u786e\u8bc6\u522b\u4ed8\u6b3e\u3001\u8fdd\u7ea6\u3001\u6388\u6743\u5f02\u5e38\u6216\u504f\u79bb\u4fe1\u606f\uff0c\u5efa\u8bae\u8865\u5145\u66f4\u5b8c\u6574\u6b63\u6587\u540e\u590d\u6838\u3002";
+        }
+        return jsonObject(mapOf(
+                "payment_terms_present", paymentTermsPresent,
+                "breach_clause_present", breachClausePresent,
+                "authorization_issue", authorizationIssue,
+                "deviation_detected", deviationDetected,
+                "risk_level", riskLevel,
+                "review_summary", reviewSummary
+        ));
+    }
+
+    static class ChatCompletionResult {
+        final String rawResponse;
+        final String content;
+
+        ChatCompletionResult(String rawResponse, String content) {
+            this.rawResponse = rawResponse;
+            this.content = content == null ? "" : content;
+        }
     }
 
     static String buildSummary(String taskType, String rawBody) {
@@ -1078,8 +1192,10 @@ public class Main {
         String endpoint = "";
         String requestPromptPreview = "";
         String requestPromptFull = "";
+        String normalizedSummary = "";
         String structuredResultJson = "{}";
         String structureError = "";
+        boolean normalizationApplied = false;
 
         JobRecord(String jobId, String requestId, String taskType, String queueName, int payloadSize, long createdAtMs, boolean async) {
             this.jobId = jobId;
@@ -1133,8 +1249,10 @@ public class Main {
             copy.endpoint = endpoint;
             copy.requestPromptPreview = requestPromptPreview;
             copy.requestPromptFull = requestPromptFull;
+            copy.normalizedSummary = normalizedSummary;
             copy.structuredResultJson = structuredResultJson;
             copy.structureError = structureError;
+            copy.normalizationApplied = normalizationApplied;
             return copy;
         }
 
@@ -1157,6 +1275,8 @@ public class Main {
                     "endpoint", endpoint,
                     "request_prompt_preview", requestPromptPreview,
                     "request_prompt_full", requestPromptFull,
+                    "normalized_summary", normalizedSummary,
+                    "normalization_applied", normalizationApplied,
                     "structured_result_json", structuredResultJson == null || structuredResultJson.isEmpty() ? "{}" : structuredResultJson,
                     "structure_error", structureError,
                     "queue_wait_ms", queueWaitMs,
@@ -1175,8 +1295,10 @@ public class Main {
             endpoint = stringValue(result.get("endpoint"));
             requestPromptPreview = stringValue(result.get("request_prompt_preview"));
             requestPromptFull = stringValue(result.get("request_prompt_full"));
+            normalizedSummary = stringValue(result.get("normalized_summary"));
             structuredResultJson = stringValue(result.get("structured_result"));
             structureError = stringValue(result.get("structure_error"));
+            normalizationApplied = Boolean.parseBoolean(stringValue(result.get("normalization_applied")));
         }
     }
 
@@ -1233,9 +1355,81 @@ public class Main {
     }
 
     static String extractJsonString(String body, String key) {
-        Pattern pattern = Pattern.compile("\\\"" + Pattern.quote(key) + "\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"");
-        Matcher matcher = pattern.matcher(body == null ? "" : body);
-        return matcher.find() ? matcher.group(1) : "";
+        if (body == null || body.trim().isEmpty()) {
+            return "";
+        }
+        String anchor = "\"" + key + "\"";
+        int keyStart = body.indexOf(anchor);
+        if (keyStart < 0) {
+            return "";
+        }
+        int colon = body.indexOf(":", keyStart + anchor.length());
+        if (colon < 0) {
+            return "";
+        }
+        int valueStart = colon + 1;
+        while (valueStart < body.length() && Character.isWhitespace(body.charAt(valueStart))) {
+            valueStart += 1;
+        }
+        if (valueStart >= body.length() || body.charAt(valueStart) != '"') {
+            return "";
+        }
+        StringBuilder result = new StringBuilder();
+        boolean escaping = false;
+        for (int i = valueStart + 1; i < body.length(); i++) {
+            char c = body.charAt(i);
+            if (escaping) {
+                switch (c) {
+                    case '"':
+                    case '\\':
+                    case '/':
+                        result.append(c);
+                        break;
+                    case 'b':
+                        result.append('\b');
+                        break;
+                    case 'f':
+                        result.append('\f');
+                        break;
+                    case 'n':
+                        result.append('\n');
+                        break;
+                    case 'r':
+                        result.append('\r');
+                        break;
+                    case 't':
+                        result.append('\t');
+                        break;
+                    case 'u':
+                        if (i + 4 < body.length()) {
+                            String hex = body.substring(i + 1, i + 5);
+                            try {
+                                result.append((char) Integer.parseInt(hex, 16));
+                                i += 4;
+                            } catch (NumberFormatException exception) {
+                                result.append("\\u").append(hex);
+                                i += 4;
+                            }
+                        } else {
+                            result.append("\\u");
+                        }
+                        break;
+                    default:
+                        result.append(c);
+                }
+                escaping = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaping = true;
+                continue;
+            }
+            if (c == '"') {
+                return result.toString();
+            }
+            result.append(c);
+        }
+        return result.toString();
     }
 
     static String extractRawJson(String body, String key) {

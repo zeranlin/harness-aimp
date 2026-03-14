@@ -1288,7 +1288,7 @@ public class Main {
                 connection = (HttpURLConnection) url.openConnection();
                 connection.setRequestMethod("POST");
                 connection.setConnectTimeout(2000);
-                connection.setReadTimeout(3000);
+                connection.setReadTimeout(15000);
                 connection.setDoOutput(true);
                 connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
                 byte[] payload = buildUpstreamPayload(route, request).getBytes(StandardCharsets.UTF_8);
