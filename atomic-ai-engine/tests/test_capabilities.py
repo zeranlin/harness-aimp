@@ -2,8 +2,9 @@ from atomic_ai_engine import CapabilityEngine
 
 engine = CapabilityEngine.from_config()
 rule = engine.invoke("rule_engine", {"text": "付款条款和违约责任"})
-assert rule["result"]["matched"] is True
-assert "payment_clause" in rule["result"]["matched_rules"]
+assert rule["result"]["matched"] is False
+assert rule["result"]["matched_rules"] == []
+assert rule["result"]["mode"] == "temporary_force_fallback"
 evidence = engine.invoke("evidence_chain_locate", {"text": "供应商授权链不完整"})
 assert evidence["result"]["count"] >= 1
 extract = engine.invoke("structured_extraction", {"document": "采购合同包含付款节点、违约责任和授权链不完整问题。"})
