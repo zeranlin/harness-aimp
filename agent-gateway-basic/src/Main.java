@@ -1571,8 +1571,24 @@ public class Main {
             return end < 0 ? "{}" : body.substring(valueStart, end).trim();
         }
         int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
         for (int i = valueStart; i < body.length(); i++) {
             char c = body.charAt(i);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+                continue;
+            }
             if (c == '{' || c == '[') {
                 depth += 1;
             } else if (c == '}' || c == ']') {
