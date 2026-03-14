@@ -368,6 +368,7 @@ public class Main {
                 cachedResponse.cached = true;
                 cachedResponse.queueWaitMs = 0;
                 cachedResponse.jobId = job.jobId;
+                job.setResultMetadata(cachedResponse.result);
                 job.markFinished("success", cachedResponse.modelRoute, cachedResponse.attempts, cachedResponse.durationMs, true, "cache_hit", 0);
                 replaceRecentJob(job);
                 return cachedResponse;
@@ -403,6 +404,7 @@ public class Main {
                         RuntimeResponse response = RuntimeResponse.success(request, job.jobId, route.queueName, selectedModelRoute, attempts,
                                 System.currentTimeMillis() - startedAt, payloadSize, queueWaitMs, modelResult.result);
                         job.lastResponseJson = response.toJson();
+                        job.setResultMetadata(response.result);
                         job.markFinished("success", selectedModelRoute, attempts, response.durationMs, false, "", queueWaitMs);
                         replaceRecentJob(job);
                         circuits.get(selectedModelRoute).recordSuccess();
@@ -431,6 +433,7 @@ public class Main {
                         RuntimeResponse response = RuntimeResponse.success(request, job.jobId, route.queueName, fallbackRoute, 1,
                                 System.currentTimeMillis() - startedAt, payloadSize, queueWaitMs, modelResult.result);
                         job.lastResponseJson = response.toJson();
+                        job.setResultMetadata(response.result);
                         job.markFinished("success", fallbackRoute, 1, response.durationMs, false, "fallback", queueWaitMs);
                         replaceRecentJob(job);
                         circuits.get(fallbackRoute).recordSuccess();
@@ -704,7 +707,10 @@ public class Main {
                 ? ""
                 : System.getenv(routeDecision.preferredAuthEnv);
         String modelName = modelRoute.contains(":") ? modelRoute.substring(modelRoute.indexOf(':') + 1) : modelRoute;
-        String prompt = "Task type: " + request.taskType + "\nPayload: " + request.rawBody + "\nRespond with a short execution summary.";
+        String prompt = extractJsonString(request.rawBody, "prompt");
+        if (prompt.isEmpty()) {
+            prompt = "Task type: " + request.taskType + "\nPayload: " + request.rawBody + "\nRespond with a short execution summary.";
+        }
         String body = jsonObject(mapOf(
                 "model", modelName,
                 "messages", rawJson(jsonArray(Arrays.asList(
@@ -742,6 +748,8 @@ public class Main {
                 "execution_mode", "remote-l6",
                 "provider", routeDecision.preferredProvider,
                 "endpoint", endpoint,
+                "request_prompt_preview", prompt.length() > 240 ? prompt.substring(0, 240) + "..." : prompt,
+                "request_prompt_full", prompt,
                 "output_tokens_estimate", Math.max(24, summary.length() / 2)
         );
     }
@@ -1037,6 +1045,12 @@ public class Main {
         long queueWaitMs;
         long finishedAtMs;
         String lastResponseJson;
+        String resultSummary = "";
+        String executionMode = "";
+        String provider = "";
+        String endpoint = "";
+        String requestPromptPreview = "";
+        String requestPromptFull = "";
 
         JobRecord(String jobId, String requestId, String taskType, String queueName, int payloadSize, long createdAtMs, boolean async) {
             this.jobId = jobId;
@@ -1084,15 +1098,16 @@ public class Main {
             copy.queueWaitMs = queueWaitMs;
             copy.finishedAtMs = finishedAtMs;
             copy.lastResponseJson = lastResponseJson;
+            copy.resultSummary = resultSummary;
+            copy.executionMode = executionMode;
+            copy.provider = provider;
+            copy.endpoint = endpoint;
+            copy.requestPromptPreview = requestPromptPreview;
+            copy.requestPromptFull = requestPromptFull;
             return copy;
         }
 
         Map<String, Object> toMap() {
-            String resultJson = Main.extractRawJson(lastResponseJson, "result");
-            String resultSummary = extractJsonString(resultJson, "summary");
-            String executionMode = extractJsonString(resultJson, "execution_mode");
-            String provider = extractJsonString(resultJson, "provider");
-            String endpoint = extractJsonString(resultJson, "endpoint");
             return mapOf(
                     "job_id", jobId,
                     "request_id", requestId,
@@ -1109,10 +1124,24 @@ public class Main {
                     "execution_mode", executionMode,
                     "provider", provider,
                     "endpoint", endpoint,
+                    "request_prompt_preview", requestPromptPreview,
+                    "request_prompt_full", requestPromptFull,
                     "queue_wait_ms", queueWaitMs,
                     "created_at", Instant.ofEpochMilli(createdAtMs).toString(),
                     "finished_at", finishedAtMs > 0 ? Instant.ofEpochMilli(finishedAtMs).toString() : ""
             );
+        }
+
+        void setResultMetadata(Map<String, Object> result) {
+            if (result == null) {
+                return;
+            }
+            resultSummary = stringValue(result.get("summary"));
+            executionMode = stringValue(result.get("execution_mode"));
+            provider = stringValue(result.get("provider"));
+            endpoint = stringValue(result.get("endpoint"));
+            requestPromptPreview = stringValue(result.get("request_prompt_preview"));
+            requestPromptFull = stringValue(result.get("request_prompt_full"));
         }
     }
 
@@ -1132,6 +1161,10 @@ public class Main {
             return "pricing";
         }
         return "model-runtime";
+    }
+
+    static String stringValue(Object value) {
+        return value == null ? "" : String.valueOf(value);
     }
 
     static void writeJson(HttpExchange exchange, int statusCode, String payload) throws IOException {

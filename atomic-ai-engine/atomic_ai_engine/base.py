@@ -14,7 +14,7 @@ class BaseCapability:
         model_payload = None
         model_response = None
         if self.depends_on_model_runtime and self.l4_client and self.l4_task_type:
-            model_payload = {"request_id": request_id, "task_type": self.l4_task_type, "input": payload}
+            model_payload = self.build_model_payload(request_id=request_id, payload=payload, context=context or {}, options=options or {})
             _, model_response = self.l4_client.invoke(self.l4_task_type, model_payload)
         result = self.build_result(payload, model_response)
         return {
@@ -32,3 +32,6 @@ class BaseCapability:
 
     def build_evidence(self, payload, result):
         return []
+
+    def build_model_payload(self, request_id, payload, context=None, options=None):
+        return {"request_id": request_id, "task_type": self.l4_task_type, "input": payload}

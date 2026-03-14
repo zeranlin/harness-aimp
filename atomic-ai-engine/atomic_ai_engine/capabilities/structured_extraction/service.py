@@ -5,6 +5,27 @@ class StructuredExtractionCapability(BaseCapability):
     depends_on_model_runtime = True
     l4_task_type = "structured_extraction"
 
+    def build_model_payload(self, request_id, payload, context=None, options=None):
+        document = str(payload.get("document") or payload.get("text") or "")
+        prompt = (
+            "你是采购与合规审查助手。请基于下面的文档内容，输出结构化审查结论。\n"
+            "请重点判断并总结：\n"
+            "1. 是否存在付款条款\n"
+            "2. 是否存在违约条款\n"
+            "3. 是否存在授权链异常\n"
+            "4. 是否存在技术或条款偏离\n"
+            "5. 综合风险等级（low/medium/high）\n"
+            "6. 给出一段简短的中文审查摘要\n\n"
+            "文档内容：\n"
+            f"{document}"
+        )
+        return {
+            "request_id": request_id,
+            "task_type": self.l4_task_type,
+            "input": payload,
+            "prompt": prompt,
+        }
+
     def build_result(self, payload, model_response=None):
         document = str(payload.get("document") or payload.get("text") or "")
         payment_terms_present = "付款" in document

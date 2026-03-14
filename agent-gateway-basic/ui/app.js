@@ -10,7 +10,7 @@ const routes = [
   { path: "/console/debug", label: "调试台", title: "调试工作台", description: "构造请求、查看契约转换、Trace 与 Replay。" },
 ];
 
-const consoleBuildVersion = "2026-03-14-debug-v2";
+const consoleBuildVersion = "2026-03-14-debug-v4";
 
 let viewDetails = null;
 
@@ -222,6 +222,9 @@ async function renderDebug() {
     </div>
     <div id="debug-model-proof" style="margin-top:16px;">
       ${sectionCard("大模型调用证据", "这里会显示是否进入远程模型执行，以及对应的 provider、endpoint 和 runtime 作业数。")}
+    </div>
+    <div id="debug-model-prompt" style="margin-top:16px;">
+      ${sectionCard("发送给大模型的业务提示", "发送一次完整链路调试请求后，这里会显示真正发给大模型的业务提示内容。")}
     </div>
     <div id="debug-model-full" style="margin-top:16px;"></div>
     <div class="split" style="margin-top:16px;">
@@ -547,6 +550,7 @@ function renderDebugSummary(tracePayload = {}) {
   const node = document.getElementById("debug-summary");
   const modelNode = document.getElementById("debug-model-summary");
   const proofNode = document.getElementById("debug-model-proof");
+  const promptNode = document.getElementById("debug-model-prompt");
   const modelFullNode = document.getElementById("debug-model-full");
   if (!node) return;
   const summary = tracePayload.summary || {};
@@ -558,6 +562,8 @@ function renderDebugSummary(tracePayload = {}) {
   const modelSummary = modelResult.result_summary || "当前没有可展示的大模型返回摘要。";
   const normalizedModelSummary = normalizeModelOutput(modelSummary);
   const shortModelSummary = shortModelOutput(normalizedModelSummary, qwenHit);
+  const promptPreview = normalizeModelOutput(modelResult.request_prompt_preview || "");
+  const promptFull = normalizeModelOutput(modelResult.request_prompt_full || "");
   const modelMeta = [
     modelResult.execution_mode ? `执行方式：${modelResult.execution_mode}` : "",
     modelResult.provider ? `提供方：${modelResult.provider}` : "",
@@ -589,19 +595,43 @@ function renderDebugSummary(tracePayload = {}) {
       qwenHit ? "good" : "warn"
     );
   }
+  if (promptNode) {
+    promptNode.innerHTML = sectionCard(
+      "发送给大模型的业务提示",
+      promptPreview || "当前还没有可展示的业务提示内容。",
+      qwenHit ? "good" : ""
+    );
+  }
   if (modelFullNode) {
-    modelFullNode.innerHTML = normalizedModelSummary && normalizedModelSummary !== "当前没有可展示的大模型返回摘要。"
-      ? `<div style="display:none" id="model-full-panel"><div class="label">完整模型返回</div><pre id="model-full-content">${escapeHtml(normalizedModelSummary)}</pre></div>`
-      : "";
+    const blocks = [];
+    if (promptFull) {
+      blocks.push(`<div style="display:none" id="model-prompt-panel"><div class="label">完整业务提示</div><pre id="model-prompt-content">${escapeHtml(promptFull)}</pre></div>`);
+    }
+    if (normalizedModelSummary && normalizedModelSummary !== "当前没有可展示的大模型返回摘要。") {
+      blocks.push(`<div style="display:none" id="model-full-panel"><div class="label">完整模型返回</div><pre id="model-full-content">${escapeHtml(normalizedModelSummary)}</pre></div>`);
+    }
+    modelFullNode.innerHTML = blocks.join("");
   }
   bindModelSummaryToggle();
 }
 
 function normalizeModelOutput(text) {
-  return String(text || "")
+  const normalized = decodeEscapedUnicode(String(text || ""))
     .replace(/\\\\n/g, "\n")
     .replace(/\\n/g, "\n")
     .trim();
+  return normalized;
+}
+
+function decodeEscapedUnicode(text) {
+  if (!text || text.indexOf("\\u") === -1) {
+    return String(text || "");
+  }
+  try {
+    return JSON.parse(`"${String(text).replace(/\\\\/g, "\\\\\\\\").replace(/"/g, '\\"')}"`);
+  } catch (error) {
+    return String(text || "");
+  }
 }
 
 function shortModelOutput(text, qwenHit) {
@@ -632,9 +662,15 @@ function bindModelSummaryToggle() {
   toggleModelFull.dataset.bound = "true";
   toggleModelFull.addEventListener("click", () => {
     const panel = document.getElementById("model-full-panel");
-    if (!panel) return;
-    const visible = panel.style.display !== "none";
-    panel.style.display = visible ? "none" : "block";
+    const promptPanel = document.getElementById("model-prompt-panel");
+    if (!panel && !promptPanel) return;
+    const visible = panel ? panel.style.display !== "none" : (promptPanel && promptPanel.style.display !== "none");
+    if (panel) {
+      panel.style.display = visible ? "none" : "block";
+    }
+    if (promptPanel) {
+      promptPanel.style.display = visible ? "none" : "block";
+    }
     toggleModelFull.textContent = visible ? "查看完整模型返回" : "收起完整模型返回";
   });
 }
