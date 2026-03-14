@@ -402,6 +402,7 @@ public class Main {
                         ModelExecutionResult modelResult = future.get(effectiveTimeoutMs, TimeUnit.MILLISECONDS);
                         RuntimeResponse response = RuntimeResponse.success(request, job.jobId, route.queueName, selectedModelRoute, attempts,
                                 System.currentTimeMillis() - startedAt, payloadSize, queueWaitMs, modelResult.result);
+                        job.lastResponseJson = response.toJson();
                         job.markFinished("success", selectedModelRoute, attempts, response.durationMs, false, "", queueWaitMs);
                         replaceRecentJob(job);
                         circuits.get(selectedModelRoute).recordSuccess();
@@ -429,6 +430,7 @@ public class Main {
                         ModelExecutionResult modelResult = future.get(fallbackTimeoutMs, TimeUnit.MILLISECONDS);
                         RuntimeResponse response = RuntimeResponse.success(request, job.jobId, route.queueName, fallbackRoute, 1,
                                 System.currentTimeMillis() - startedAt, payloadSize, queueWaitMs, modelResult.result);
+                        job.lastResponseJson = response.toJson();
                         job.markFinished("success", fallbackRoute, 1, response.durationMs, false, "fallback", queueWaitMs);
                         replaceRecentJob(job);
                         circuits.get(fallbackRoute).recordSuccess();
@@ -479,6 +481,9 @@ public class Main {
             String selectedRoute = chooseModelRoute(routeDecision, circuits.get(routeDecision.preferredModelRoute));
             long durationMs = Math.max(1, System.currentTimeMillis() - job.createdAtMs);
             job.markFinished("error", selectedRoute, attempts, durationMs, false, errorCode, queueWaitMs);
+            job.lastResponseJson = RuntimeResponse.error(httpStatus, request, job.jobId, route.queueName, selectedRoute, attempts, durationMs,
+                    payloadSize, queueWaitMs, errorCode.isEmpty() ? "RUNTIME_EXECUTION_FAILED" : errorCode,
+                    message == null || message.isEmpty() ? "runtime execution failed" : message).toJson();
             replaceRecentJob(job);
             return RuntimeResponse.error(httpStatus, request, job.jobId, route.queueName, selectedRoute, attempts, durationMs,
                     payloadSize, queueWaitMs, errorCode.isEmpty() ? "RUNTIME_EXECUTION_FAILED" : errorCode,
@@ -1083,6 +1088,11 @@ public class Main {
         }
 
         Map<String, Object> toMap() {
+            String resultJson = Main.extractRawJson(lastResponseJson, "result");
+            String resultSummary = extractJsonString(resultJson, "summary");
+            String executionMode = extractJsonString(resultJson, "execution_mode");
+            String provider = extractJsonString(resultJson, "provider");
+            String endpoint = extractJsonString(resultJson, "endpoint");
             return mapOf(
                     "job_id", jobId,
                     "request_id", requestId,
@@ -1095,6 +1105,10 @@ public class Main {
                     "duration_ms", durationMs,
                     "cached", cached,
                     "error_code", errorCode == null ? "" : errorCode,
+                    "result_summary", resultSummary,
+                    "execution_mode", executionMode,
+                    "provider", provider,
+                    "endpoint", endpoint,
                     "queue_wait_ms", queueWaitMs,
                     "created_at", Instant.ofEpochMilli(createdAtMs).toString(),
                     "finished_at", finishedAtMs > 0 ? Instant.ofEpochMilli(finishedAtMs).toString() : ""
@@ -1154,6 +1168,52 @@ public class Main {
         Pattern pattern = Pattern.compile("\\\"" + Pattern.quote(key) + "\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"");
         Matcher matcher = pattern.matcher(body == null ? "" : body);
         return matcher.find() ? matcher.group(1) : "";
+    }
+
+    static String extractRawJson(String body, String key) {
+        if (body == null || body.trim().isEmpty()) {
+            return "{}";
+        }
+        String anchor = "\"" + key + "\":";
+        int start = body.indexOf(anchor);
+        if (start < 0) {
+            return "{}";
+        }
+        int valueStart = start + anchor.length();
+        while (valueStart < body.length() && Character.isWhitespace(body.charAt(valueStart))) {
+            valueStart += 1;
+        }
+        if (valueStart >= body.length()) {
+            return "{}";
+        }
+        char first = body.charAt(valueStart);
+        if (first == '"') {
+            int end = body.indexOf("\"", valueStart + 1);
+            while (end > 0 && body.charAt(end - 1) == '\\') {
+                end = body.indexOf("\"", end + 1);
+            }
+            return end < 0 ? "{}" : body.substring(valueStart, end + 1);
+        }
+        if (first != '{' && first != '[') {
+            int end = body.indexOf(",", valueStart);
+            if (end < 0) {
+                end = body.indexOf("}", valueStart);
+            }
+            return end < 0 ? "{}" : body.substring(valueStart, end).trim();
+        }
+        int depth = 0;
+        for (int i = valueStart; i < body.length(); i++) {
+            char c = body.charAt(i);
+            if (c == '{' || c == '[') {
+                depth += 1;
+            } else if (c == '}' || c == ']') {
+                depth -= 1;
+                if (depth == 0) {
+                    return body.substring(valueStart, i + 1);
+                }
+            }
+        }
+        return "{}";
     }
 
     static int extractJsonInt(String body, String key, int defaultValue) {
