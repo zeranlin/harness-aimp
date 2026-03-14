@@ -6,12 +6,12 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.BufferedReader;
-import java.io.FileReader;
+import java.io.OutputStreamWriter;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -886,9 +886,9 @@ public class Main {
             if (parent != null && !parent.exists()) {
                 parent.mkdirs();
             }
-            FileWriter writer = null;
+            OutputStreamWriter writer = null;
             try {
-                writer = new FileWriter(traceLogFile, true);
+                writer = new OutputStreamWriter(new java.io.FileOutputStream(traceLogFile, true), StandardCharsets.UTF_8);
                 writer.write(event.toJson());
                 writer.write("\n");
             } catch (IOException ignored) {
@@ -909,7 +909,7 @@ public class Main {
             BufferedReader reader = null;
             String match = null;
             try {
-                reader = new BufferedReader(new FileReader(traceLogFile));
+                reader = new BufferedReader(new InputStreamReader(new FileInputStream(traceLogFile), StandardCharsets.UTF_8));
                 String line;
                 while ((line = reader.readLine()) != null) {
                     if (line.indexOf("\"request_id\":\"" + escapeJson(requestId) + "\"") >= 0) {
@@ -976,7 +976,7 @@ public class Main {
             }
             BufferedReader reader = null;
             try {
-                reader = new BufferedReader(new FileReader(capabilityLog));
+                reader = new BufferedReader(new InputStreamReader(new FileInputStream(capabilityLog), StandardCharsets.UTF_8));
                 String line;
                 while ((line = reader.readLine()) != null) {
                     String lineRequestId = extractJsonString(line, "request_id");
@@ -1022,9 +1022,9 @@ public class Main {
             if (parent != null && !parent.exists()) {
                 parent.mkdirs();
             }
-            FileWriter writer = null;
+            OutputStreamWriter writer = null;
             try {
-                writer = new FileWriter(auditLogFile, true);
+                writer = new OutputStreamWriter(new java.io.FileOutputStream(auditLogFile, true), StandardCharsets.UTF_8);
                 writer.write(event.toJson());
                 writer.write("\n");
             } catch (IOException ignored) {
@@ -1046,7 +1046,7 @@ public class Main {
             Deque<String> lines = new ArrayDeque<String>();
             BufferedReader reader = null;
             try {
-                reader = new BufferedReader(new FileReader(auditLogFile));
+                reader = new BufferedReader(new InputStreamReader(new FileInputStream(auditLogFile), StandardCharsets.UTF_8));
                 String line;
                 while ((line = reader.readLine()) != null) {
                     if (!line.trim().isEmpty()) {
@@ -1074,9 +1074,9 @@ public class Main {
             if (parent != null && !parent.exists()) {
                 parent.mkdirs();
             }
-            FileWriter writer = null;
+            OutputStreamWriter writer = null;
             try {
-                writer = new FileWriter(metricsLogFile, true);
+                writer = new OutputStreamWriter(new java.io.FileOutputStream(metricsLogFile, true), StandardCharsets.UTF_8);
                 writer.write(event.toJson());
                 writer.write("\n");
             } catch (IOException ignored) {
@@ -1097,7 +1097,7 @@ public class Main {
             Deque<String> lines = new ArrayDeque<String>();
             BufferedReader reader = null;
             try {
-                reader = new BufferedReader(new FileReader(metricsLogFile));
+                reader = new BufferedReader(new InputStreamReader(new FileInputStream(metricsLogFile), StandardCharsets.UTF_8));
                 String line;
                 while ((line = reader.readLine()) != null) {
                     if (!line.trim().isEmpty()) {
