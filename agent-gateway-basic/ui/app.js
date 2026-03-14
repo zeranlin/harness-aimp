@@ -204,6 +204,12 @@ async function renderGateway() {
 async function renderDebug() {
   return `
     <div class="toolbar"><h2>完整链路调试</h2><div></div></div>
+    <div id="debug-summary" class="grid stats" style="margin-top:16px;">
+      ${card("链路状态", "待执行")}
+      ${card("目标契约", "-")}
+      ${card("Qwen 命中", "-")}
+      ${card("问题层级", "-")}
+    </div>
     <div class="split" style="margin-top:16px;">
       <div class="stack">
         <div class="field"><label>调试链路</label><select id="service"><option value="qa">L1 -> L2 -> L3 -> L4</option><option value="compliance">L1 -> L3</option><option value="pricing">L1 -> L4</option></select></div>
@@ -478,6 +484,7 @@ async function sendDebugRequest() {
     if (requestId) {
       document.getElementById("trace-id").value = requestId;
     }
+    renderDebugSummary(payload.chain_trace || payload);
     transformedNode.textContent = pretty(payload.transformed_request || payload);
     gatewayNode.textContent = pretty(payload.gateway_response || payload);
     traceNode.textContent = pretty(payload.chain_trace || payload);
@@ -486,6 +493,7 @@ async function sendDebugRequest() {
       status: "error",
       message: error.message || "调试请求失败",
     };
+    renderDebugSummary(failure);
     transformedNode.textContent = pretty(failure);
     gatewayNode.textContent = pretty(failure);
     traceNode.textContent = pretty(failure);
@@ -495,13 +503,45 @@ async function sendDebugRequest() {
 async function loadTrace() {
   const requestId = document.getElementById("trace-id").value;
   const payload = await getJson(`/debug/trace/${encodeURIComponent(requestId)}`);
+  renderDebugSummary(payload);
   document.getElementById("trace-response").textContent = pretty(payload);
 }
 
 async function replayTrace() {
   const requestId = document.getElementById("trace-id").value;
   const payload = await getJson(`/debug/replay/${encodeURIComponent(requestId)}`, { method: "POST" });
+  renderDebugSummary(payload.replay_response || payload);
   document.getElementById("trace-response").textContent = pretty(payload);
+}
+
+function detectBrokenLayer(tracePayload = {}) {
+  if (tracePayload.status === "error") return "L1";
+  if (tracePayload.l4_runtime && tracePayload.l4_runtime.count === 0 && tracePayload.summary && tracePayload.summary.target_contract?.startsWith("L2.")) {
+    const l2 = tracePayload.l2_execution || {};
+    if (l2.status === "error") return "L2";
+    const l3 = tracePayload.l3_capabilities || {};
+    if ((l3.count || 0) === 0) return "L3";
+  }
+  if (tracePayload.l4_runtime && tracePayload.l4_runtime.count > 0) {
+    const hasRuntimeError = (tracePayload.l4_runtime.items || []).some((item) => item.status && item.status !== "success");
+    if (hasRuntimeError) return "L4";
+  }
+  return "-";
+}
+
+function renderDebugSummary(tracePayload = {}) {
+  const node = document.getElementById("debug-summary");
+  if (!node) return;
+  const summary = tracePayload.summary || {};
+  const chainOk = summary.complete_chain === true || tracePayload.status === "ok";
+  const qwenHit = summary.hit_qwen35_27b === true;
+  const brokenLayer = detectBrokenLayer(tracePayload);
+  node.innerHTML = `
+    ${card("链路状态", chainOk ? "成功" : "待检查", chainOk ? "good" : "warn")}
+    ${card("目标契约", summary.target_contract || "-")}
+    ${card("Qwen 命中", qwenHit ? "已命中" : "未命中", qwenHit ? "good" : "")}
+    ${card("问题层级", brokenLayer, brokenLayer !== "-" ? "bad" : "")}
+  `;
 }
 
 function safeParseJson(text) {
