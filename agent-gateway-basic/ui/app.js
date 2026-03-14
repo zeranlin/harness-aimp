@@ -213,6 +213,7 @@ async function renderDebug() {
     <div id="debug-model-summary" style="margin-top:16px;">
       ${sectionCard("大模型返回摘要", "发送一次完整链路调试请求后，这里会直接显示 Qwen 的返回摘要。")}
     </div>
+    <div id="debug-model-full" style="margin-top:16px;"></div>
     <div class="split" style="margin-top:16px;">
       <div class="stack">
         <div class="field"><label>调试链路</label><select id="service"><option value="qa">L1 -> L2 -> L3 -> L4</option><option value="compliance">L1 -> L3</option><option value="pricing">L1 -> L4</option></select></div>
@@ -535,6 +536,7 @@ function detectBrokenLayer(tracePayload = {}) {
 function renderDebugSummary(tracePayload = {}) {
   const node = document.getElementById("debug-summary");
   const modelNode = document.getElementById("debug-model-summary");
+  const modelFullNode = document.getElementById("debug-model-full");
   if (!node) return;
   const summary = tracePayload.summary || {};
   const chainOk = summary.complete_chain === true || tracePayload.status === "ok";
@@ -543,6 +545,8 @@ function renderDebugSummary(tracePayload = {}) {
   const runtimeItems = (((tracePayload || {}).l4_runtime || {}).items) || [];
   const modelResult = runtimeItems[0] || {};
   const modelSummary = modelResult.result_summary || "当前没有可展示的大模型返回摘要。";
+  const normalizedModelSummary = normalizeModelOutput(modelSummary);
+  const shortModelSummary = shortModelOutput(normalizedModelSummary, qwenHit);
   const modelMeta = [
     modelResult.execution_mode ? `执行方式：${modelResult.execution_mode}` : "",
     modelResult.provider ? `提供方：${modelResult.provider}` : "",
@@ -558,10 +562,44 @@ function renderDebugSummary(tracePayload = {}) {
   if (modelNode) {
     modelNode.innerHTML = sectionCard(
       "大模型返回摘要",
-      `${modelSummary}${modelMeta ? `<br/><br/>${modelMeta}` : ""}`,
+      `${shortModelSummary}${modelMeta ? `<br/><br/>${modelMeta}` : ""}${normalizedModelSummary && normalizedModelSummary !== "当前没有可展示的大模型返回摘要。" ? `<br/><br/><button class="secondary" id="toggle-model-full">查看完整模型返回</button>` : ""}`,
       qwenHit ? "good" : ""
     );
   }
+  if (modelFullNode) {
+    modelFullNode.innerHTML = normalizedModelSummary && normalizedModelSummary !== "当前没有可展示的大模型返回摘要。"
+      ? `<div style="display:none" id="model-full-panel"><div class="label">完整模型返回</div><pre id="model-full-content">${escapeHtml(normalizedModelSummary)}</pre></div>`
+      : "";
+  }
+}
+
+function normalizeModelOutput(text) {
+  return String(text || "")
+    .replace(/\\\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .trim();
+}
+
+function shortModelOutput(text, qwenHit) {
+  if (!text) {
+    return "当前没有可展示的大模型返回摘要。";
+  }
+  if (text.includes("Thinking Process")) {
+    return qwenHit
+      ? "Qwen 已完成远程推理，并返回了较长的分析过程。可点击下方按钮查看完整模型返回。"
+      : "模型已返回较长的分析过程。可点击下方按钮查看完整模型返回。";
+  }
+  if (text.length <= 120) {
+    return text;
+  }
+  return `${text.slice(0, 120)}...`;
+}
+
+function escapeHtml(text) {
+  return String(text || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function safeParseJson(text) {
@@ -688,6 +726,16 @@ function bindInteractions() {
   if (trace) trace.addEventListener("click", loadTrace);
   const replay = document.getElementById("replay-trace");
   if (replay) replay.addEventListener("click", replayTrace);
+  const toggleModelFull = document.getElementById("toggle-model-full");
+  if (toggleModelFull) {
+    toggleModelFull.addEventListener("click", () => {
+      const panel = document.getElementById("model-full-panel");
+      if (!panel) return;
+      const visible = panel.style.display !== "none";
+      panel.style.display = visible ? "none" : "block";
+      toggleModelFull.textContent = visible ? "查看完整模型返回" : "收起完整模型返回";
+    });
+  }
   const refreshers = {
     "refresh-dashboard": "/console/dashboard",
     "refresh-gateway": "/console/gateway",
